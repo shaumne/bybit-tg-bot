@@ -37,18 +37,27 @@ class TelegramBot:
         self.chat_id = settings.TELEGRAM_CHAT_ID
         self.user_settings = self.load_user_settings()
         
+        # Load saved settings if they exist
+        if 'trade_settings' in self.user_settings:
+            self.settings = {
+                'min_value': 5.0,
+                'quantity': self.user_settings['trade_settings'].get('quantity', settings.QUANTITY),
+                'stop_loss': self.user_settings['trade_settings'].get('stop_loss', settings.STOP_LOSS_PCT),
+                'take_profit': self.user_settings['trade_settings'].get('take_profit', settings.TAKE_PROFIT_PCT),
+                'leverage': self.user_settings['trade_settings'].get('leverage', 1)
+            }
+        else:
+            self.settings = {
+                'min_value': 5.0,
+                'quantity': settings.QUANTITY,
+                'stop_loss': settings.STOP_LOSS_PCT,
+                'take_profit': settings.TAKE_PROFIT_PCT,
+                'leverage': 1
+            }
+        
         if not self.bot_token or not self.chat_id:
             logger.error("Telegram bot token or chat ID not found in settings!")
             raise ValueError("Telegram bot token or chat ID not found!")
-        
-        # Initialize settings with defaults
-        self.settings = {
-            'min_value': 5.0,
-            'quantity': settings.QUANTITY,
-            'stop_loss': settings.STOP_LOSS_PCT,
-            'take_profit': settings.TAKE_PROFIT_PCT,
-            'leverage': 1
-        }
         
         # Initialize bot application
         self.app = Application.builder().token(self.bot_token).build()
@@ -274,7 +283,7 @@ class TelegramBot:
                 await update.message.reply_text("❌ Wrong password! Try again:")
                 return WAITING_PASSWORD
 
-        # Diğer ayar güncellemeleri...
+        # Ayar güncellemeleri
         try:
             if state == SET_QUANTITY:
                 try:
@@ -282,6 +291,12 @@ class TelegramBot:
                     if quantity <= 0:
                         raise ValueError
                     self.settings['quantity'] = quantity
+                    # user_settings'e kaydet
+                    if 'trade_settings' not in self.user_settings:
+                        self.user_settings['trade_settings'] = {}
+                    self.user_settings['trade_settings']['quantity'] = quantity
+                    self.save_user_settings(self.user_settings)
+                    
                     settings_text, markup = self.get_settings_menu()
                     await update.message.reply_text(
                         f"✅ Quantity updated to {quantity} USDT\n\n{settings_text}",
@@ -299,6 +314,12 @@ class TelegramBot:
                     if not 0 < sl <= 100:
                         raise ValueError
                     self.settings['stop_loss'] = sl
+                    # user_settings'e kaydet
+                    if 'trade_settings' not in self.user_settings:
+                        self.user_settings['trade_settings'] = {}
+                    self.user_settings['trade_settings']['stop_loss'] = sl
+                    self.save_user_settings(self.user_settings)
+                    
                     settings_text, markup = self.get_settings_menu()
                     await update.message.reply_text(
                         f"✅ Stop Loss updated to {sl}%\n\n{settings_text}",
@@ -316,6 +337,12 @@ class TelegramBot:
                     if not 0 < tp <= 100:
                         raise ValueError
                     self.settings['take_profit'] = tp
+                    # user_settings'e kaydet
+                    if 'trade_settings' not in self.user_settings:
+                        self.user_settings['trade_settings'] = {}
+                    self.user_settings['trade_settings']['take_profit'] = tp
+                    self.save_user_settings(self.user_settings)
+                    
                     settings_text, markup = self.get_settings_menu()
                     await update.message.reply_text(
                         f"✅ Take Profit updated to {tp}%\n\n{settings_text}",
@@ -333,6 +360,12 @@ class TelegramBot:
                     if not 1 <= leverage <= 100:
                         raise ValueError
                     self.settings['leverage'] = leverage
+                    # user_settings'e kaydet
+                    if 'trade_settings' not in self.user_settings:
+                        self.user_settings['trade_settings'] = {}
+                    self.user_settings['trade_settings']['leverage'] = leverage
+                    self.save_user_settings(self.user_settings)
+                    
                     settings_text, markup = self.get_settings_menu()
                     await update.message.reply_text(
                         f"✅ Leverage updated to {leverage}x\n\n{settings_text}",
@@ -366,97 +399,7 @@ class TelegramBot:
         elif query.data == 'account_info':
             await self.show_account_info(query)
         elif query.data == 'test_announcement':
-            # Simüle edilmiş duyuru mesajı
-            test_announcement = {
-                'title': 'Test: New MNT Launchpool!',
-                'description': 'This is a test announcement to simulate real launchpool behavior.',
-                'dateTimestamp': str(int(datetime.now().timestamp() * 1000)),
-                'url': 'https://www.bybit.com/announcements'
-            }
-            
-            # Format announcement time
-            timestamp = int(test_announcement.get('dateTimestamp', 0)) / 1000
-            date_time = datetime.fromtimestamp(timestamp).strftime('%Y-%m-%d %H:%M:%S')
-            
-            # Format announcement message
-            message = (
-                "🔥 <b>New Launchpool Announcement!</b> 🔥\n\n"
-                f"📌 <b>Title:</b>\n{test_announcement['title']}\n\n"
-                f"📝 <b>Description:</b>\n{test_announcement['description']}\n\n"
-                f"⏰ <b>Time:</b> {date_time}\n"
-                f"🔗 <b>Link:</b> {test_announcement['url']}\n\n"
-                "➖➖➖➖➖➖➖➖➖➖\n"
-                "🤖 <b>Bot Action:</b>\n"
-                f"• Symbol: MNTUSDT\n"
-                f"• Quantity: {settings.QUANTITY}\n"
-                f"• Stop Loss: {settings.STOP_LOSS_PCT}%\n"
-                f"• Take Profit: {settings.TAKE_PROFIT_PCT}%\n"
-                f"• Leverage: {self.settings['leverage']}x\n\n"
-                "🚀 Opening LONG position..."
-            )
-            
-            # Send announcement message
-            await query.message.reply_text(
-                message,
-                parse_mode='HTML',
-                disable_web_page_preview=True
-            )
-            
-            # Execute trade
-            trader = TradeExecutor()
-            try:
-                trade_result = trader.execute_trade(
-                    side="Buy",
-                    quantity=settings.QUANTITY,
-                    sl_percentage=settings.STOP_LOSS_PCT,
-                    tp_percentage=settings.TAKE_PROFIT_PCT,
-                    leverage=self.settings['leverage'],
-                    category="linear"
-                )
-                
-                if trade_result:
-                    trade_message = (
-                        "✅ <b>Trade Executed Successfully!</b>\n\n"
-                        f"💹 <b>Entry Price:</b> {trade_result['price']}\n"
-                        f"📊 <b>Quantity:</b> {trade_result['quantity']} MNT\n"
-                        f"🔻 <b>Stop Loss:</b> {trade_result['stop_loss']}\n"
-                        f"🔼 <b>Take Profit:</b> {trade_result['take_profit']}\n"
-                        "➖➖➖➖➖➖➖➖➖➖\n"
-                        "⚠️ <i>Monitor your position in Bybit!</i>"
-                    )
-                    
-                    await query.message.reply_text(
-                        trade_message,
-                        parse_mode='HTML'
-                    )
-                    
-                    # Start position monitoring
-                    context.job_queue.run_repeating(
-                        self.check_position_status,
-                        interval=60,  # Her 1 dakikada bir kontrol
-                        first=10,    # İlk kontrol 10 saniye sonra
-                        data=trade_result.get('orderId'),
-                        name=f"position_monitor_{trade_result.get('orderId')}"
-                    )
-                    
-                    await query.message.reply_text(
-                        "📊 Position monitoring started!\n"
-                        "You will receive updates every minute.",
-                        parse_mode='HTML'
-                    )
-
-            except Exception as e:
-                error_message = (
-                    "❌ <b>Trade Execution Failed!</b>\n\n"
-                    f"Error: {str(e)}\n\n"
-                    "Please check your settings and try again."
-                )
-                
-                await query.message.reply_text(
-                    error_message,
-                    parse_mode='HTML'
-                )
-        
+            await self.test_announcement(query)
         elif query.data == 'settings':
             current_settings, reply_markup = self.get_settings_menu()
             await query.message.edit_text(
@@ -591,10 +534,9 @@ class TelegramBot:
                 trader = TradeExecutor()
                 try:
                     trade_result = trader.execute_trade(
-                        side="Buy",
                         quantity=settings.QUANTITY,
-                        sl_percentage=settings.STOP_LOSS_PCT,
-                        tp_percentage=settings.TAKE_PROFIT_PCT,
+                        stop_loss=settings.STOP_LOSS_PCT,
+                        take_profit=settings.TAKE_PROFIT_PCT,
                         leverage=self.settings['leverage'],
                         category="linear"
                     )
@@ -823,6 +765,70 @@ class TelegramBot:
         except Exception as e:
             logger.error(f"Error showing account info: {str(e)}")
             await query.message.reply_text("❌ Error fetching account info!")
+
+    async def test_announcement(self, query):
+        """Test announcement handler"""
+        try:
+            # Güncel ayarları kullan
+            current_quantity = self.settings.get('quantity', settings.QUANTITY)
+            current_sl = self.settings.get('stop_loss', settings.STOP_LOSS_PCT)
+            current_tp = self.settings.get('take_profit', settings.TAKE_PROFIT_PCT)
+            current_leverage = self.settings.get('leverage', 1)
+
+            now = datetime.now()
+            announcement = {
+                'title': 'Test: New MNT Launchpool!',
+                'description': 'This is a test announcement to simulate real launchpool behavior.',
+                'time': now.strftime('%Y-%m-%d %H:%M:%S'),
+                'link': 'https://www.bybit.com/announcements'
+            }
+
+            message = (
+                "🔥 <b>New Launchpool Announcement!</b> 🔥\n\n"
+                f"📌 <b>Title:</b>\n{announcement['title']}\n\n"
+                f"📝 <b>Description:</b>\n{announcement['description']}\n\n"
+                f"⏰ Time: {announcement['time']}\n"
+                f"🔗 Link: {announcement['link']}\n\n"
+                "➖➖➖➖➖➖➖➖➖➖\n"
+                "🤖 <b>Bot Action:</b>\n"
+                "• Symbol: MNTUSDT\n"
+                f"• Quantity: {current_quantity}\n"
+                f"• Stop Loss: {current_sl}%\n"
+                f"• Take Profit: {current_tp}%\n"
+                f"• Leverage: {current_leverage}x\n\n"
+                "🚀 Opening LONG position...\n"
+            )
+
+            await query.message.edit_text(message, parse_mode='HTML')
+
+            # Trade işlemi
+            trader = TradeExecutor()
+            result = await trader.execute_trade(
+                quantity=current_quantity,
+                stop_loss=current_sl,
+                take_profit=current_tp,
+                leverage=current_leverage
+            )
+
+            if result and result.get('success'):
+                trade_info = result.get('data', {})
+                message += (
+                    "✅ Trade Executed Successfully!\n\n"
+                    f"💹 Entry Price: {trade_info.get('entry_price', 0)}\n"
+                    f"📊 Quantity: {current_quantity} MNT\n"
+                    f"🔻 Stop Loss: {current_sl}\n"
+                    f"🔼 Take Profit: {current_tp}\n"
+                    "➖➖➖➖➖➖➖➖➖➖\n"
+                    "⚠️ Monitor your position in Bybit!"
+                )
+            else:
+                message += "❌ Trade execution failed!"
+
+            await query.message.edit_text(message, parse_mode='HTML')
+
+        except Exception as e:
+            logger.error(f"Error in test announcement: {str(e)}")
+            await query.message.edit_text("❌ Error during test announcement!")
 
 def run_bot():
     """Run the bot"""

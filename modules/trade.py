@@ -106,96 +106,55 @@ class TradeExecutor:
         
         return quantity
 
-    def execute_trade(self, side, quantity, sl_percentage, tp_percentage, leverage, category="linear"):
+    async def execute_trade(self, quantity, stop_loss, take_profit, leverage):
         """Execute trade with given parameters"""
         try:
-            # Set position mode using direct API call
-            try:
-                self.client._submit_request(
-                    method='POST',
-                    path='/v5/position/switch-position-mode',
-                    data={
-                        'category': category,
-                        'symbol': self.symbol,
-                        'mode': 0  # 0: Merged Single
-                    }
-                )
-            except Exception as e:
-                logger.warning("Could not set position mode: %s", str(e))
-
-            # Set leverage using direct API call
-            try:
-                self.client._submit_request(
-                    method='POST',
-                    path='/v5/position/leverage/save',
-                    data={
-                        'category': category,
-                        'symbol': self.symbol,
-                        'leverage': str(leverage)
-                    }
-                )
-            except Exception as e:
-                logger.warning("Could not set leverage: %s", str(e))
-
-            # Get current price first
+            # Sembol sabit
+            symbol = "MNTUSDT"
+            
+            # Market fiyatını al
             ticker = self.client.get_tickers(
-                category=category,
-                symbol=self.symbol
+                category="linear",
+                symbol=symbol
             )
             
-            if not ticker or not ticker.get('result', {}).get('list'):
-                raise Exception("Could not get current price")
+            if not ticker or ticker.get('retCode') != 0:
+                return {'success': False, 'error': 'Could not get market price'}
                 
-            current_price = float(ticker['result']['list'][0]['lastPrice'])
-
-            # Trade parameters
-            params = {
-                'category': category,
-                'symbol': self.symbol,
-                'side': side,
-                'orderType': 'Market',
-                'qty': str(quantity)
-            }
-
-            # Execute trade
-            result = self.client.place_order(**params)
+            mark_price = float(ticker['result']['list'][0]['markPrice'])
             
-            if result and result.get('retCode') == 0:
-                order_result = result.get('result', {})
-                
-                # Calculate SL/TP prices
-                if side == "Buy":
-                    sl_price = current_price * (1 - sl_percentage / 100)
-                    tp_price = current_price * (1 + tp_percentage / 100)
-                else:
-                    sl_price = current_price * (1 + sl_percentage / 100)
-                    tp_price = current_price * (1 - tp_percentage / 100)
-                
-                # Set stop loss and take profit
-                try:
-                    self.client.set_trading_stop(
-                        category=category,
-                        symbol=self.symbol,
-                        stopLoss=str(sl_price),
-                        takeProfit=str(tp_price),
-                        positionIdx=0
-                    )
-                except Exception as e:
-                    logger.warning("Could not set SL/TP: %s", str(e))
-                
+            # Trade parametreleri
+            sl_price = mark_price * (1 - stop_loss/100)  # Stop loss fiyatı
+            tp_price = mark_price * (1 + take_profit/100)  # Take profit fiyatı
+            
+            # Pozisyon aç
+            response = self.client.place_order(
+                category="linear",
+                symbol=symbol,
+                side="Buy",
+                orderType="Market",
+                qty=quantity,
+                stopLoss=str(sl_price),
+                takeProfit=str(tp_price),
+                leverage=str(leverage)
+            )
+            
+            if response and response.get('retCode') == 0:
                 return {
-                    'price': str(current_price),
-                    'quantity': quantity,
-                    'stop_loss': sl_percentage,
-                    'take_profit': tp_percentage
+                    'success': True,
+                    'data': {
+                        'entry_price': mark_price,
+                        'quantity': quantity,
+                        'stop_loss': sl_price,
+                        'take_profit': tp_price
+                    }
                 }
             else:
-                logger.error("Trade failed: %s", result)
-                raise Exception(f"Trade failed: {result.get('retMsg', 'Unknown error')}")
-
+                return {'success': False, 'error': response.get('retMsg', 'Unknown error')}
+                
         except Exception as e:
-            logger.error("Trade execution error: %s", str(e))
-            raise
+            logger.error(f"Error executing trade: {str(e)}")
+            return {'success': False, 'error': str(e)}
 
     def transfer_to_unified(self, amount=1000):
         """Transfer from Funding to Unified Trading Account"""
