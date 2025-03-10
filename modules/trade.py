@@ -269,19 +269,55 @@ class TradeExecutor:
             logger.error(f"Error getting position info: {str(e)}")
             return None
             
-    def get_order_history(self, order_id):
-        """Get order history by ID"""
+    def get_order_history(self):
+        """Get recent orders"""
         try:
-            response = self.client.get_order_history(
+            response = self.client.get_orders(
                 category="linear",
                 symbol=self.symbol,
-                orderId=order_id
+                limit=5  # Son 5 emir
             )
             
-            if response and response.get('result', {}).get('list'):
-                return response['result']['list'][0]
+            if response and response.get('retCode') == 0:
+                return response.get('result', {}).get('list', [])
+            return []
+            
+        except Exception as e:
+            logger.error(f"Error getting orders: {str(e)}")
+            return []
+
+    def get_positions(self):
+        """Get all open positions"""
+        try:
+            response = self.client.get_position_info(
+                category="linear",
+                symbol=self.symbol
+            )
+            
+            if response and response.get('retCode') == 0:
+                positions = response.get('result', {}).get('list', [])
+                return [pos for pos in positions if float(pos.get('size', 0)) > 0]
+            return []
+            
+        except Exception as e:
+            logger.error(f"Error getting positions: {str(e)}")
+            return []
+
+    def get_wallet_info(self):
+        """Get wallet information"""
+        try:
+            response = self.client.get_wallet_balance(
+                accountType="UNIFIED"
+            )
+            
+            if response and response.get('retCode') == 0:
+                wallets = response.get('result', {}).get('list', [])
+                # USDT cüzdanını bul
+                for wallet in wallets:
+                    if wallet.get('coin') == 'USDT':
+                        return wallet
             return None
             
         except Exception as e:
-            logger.error(f"Error getting order history: {str(e)}")
+            logger.error(f"Error getting wallet info: {str(e)}")
             return None 

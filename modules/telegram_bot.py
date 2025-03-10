@@ -160,10 +160,7 @@ class TelegramBot:
         keyboard = [
             [
                 InlineKeyboardButton("⚙️ Settings", callback_data='settings'),
-                InlineKeyboardButton("🚀 Test Announcement", callback_data='test_announcement')
-            ],
-            [
-                InlineKeyboardButton("📊 Current Settings", callback_data='show_settings')
+                InlineKeyboardButton("🧪 Test Announcement", callback_data='test_announcement')
             ]
         ]
         return InlineKeyboardMarkup(keyboard)
@@ -172,18 +169,29 @@ class TelegramBot:
         """Get settings menu keyboard"""
         keyboard = [
             [
-                InlineKeyboardButton("📊 Quantity", callback_data='set_quantity'),
-                InlineKeyboardButton("⚡️ Leverage", callback_data='set_leverage')
+                InlineKeyboardButton("💰 Set Quantity", callback_data='set_quantity'),
+                InlineKeyboardButton("🔻 Set SL", callback_data='set_sl')
             ],
             [
-                InlineKeyboardButton("🔻 Stop Loss", callback_data='set_sl'),
-                InlineKeyboardButton("🔼 Take Profit", callback_data='set_tp')
+                InlineKeyboardButton("🔼 Set TP", callback_data='set_tp'),
+                InlineKeyboardButton("⚡️ Set Leverage", callback_data='set_leverage')
             ],
             [
-                InlineKeyboardButton("🔙 Back to Main Menu", callback_data='back_main')
+                InlineKeyboardButton("🔙 Back to Main Menu", callback_data='main_menu')
             ]
         ]
-        return InlineKeyboardMarkup(keyboard)
+        markup = InlineKeyboardMarkup(keyboard)
+        
+        settings_text = (
+            "⚙️ <b>Current Settings</b>\n\n"
+            f"💰 Quantity: {self.settings['quantity']} USDT\n"
+            f"🔻 Stop Loss: {self.settings['stop_loss']}%\n"
+            f"🔼 Take Profit: {self.settings['take_profit']}%\n"
+            f"⚡️ Leverage: {self.settings['leverage']}x\n\n"
+            "Select a setting to change:"
+        )
+        
+        return settings_text, markup
     
     def load_user_settings(self):
         """Load user settings from JSON"""
@@ -230,14 +238,9 @@ class TelegramBot:
 
     async def handle_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle text messages"""
-        # Chat ID kontrolü
-        if str(update.effective_chat.id) != str(self.chat_id):
-            await update.message.reply_text("⛔️ Unauthorized access!")
-            return
-
         state = context.user_data.get('state')
 
-        # İlk şifre belirleme
+        # İlk şifre belirleme durumu
         if state == SETTING_PASSWORD:
             if len(update.message.text) < 4:
                 await update.message.reply_text(
@@ -248,13 +251,14 @@ class TelegramBot:
                 
             self.user_settings['password'] = update.message.text
             self.save_user_settings(self.user_settings)
+            context.user_data['authenticated'] = True
             
             await update.message.reply_text(
                 "✅ Password set successfully!\n\n"
-                "Please login with your new password:"
+                "Select an option:",
+                reply_markup=self.get_main_menu()
             )
-            context.user_data['state'] = WAITING_PASSWORD
-            return WAITING_PASSWORD
+            return SELECTING_ACTION
 
         # Normal şifre kontrolü
         if not context.user_data.get('authenticated'):
@@ -270,75 +274,80 @@ class TelegramBot:
                 await update.message.reply_text("❌ Wrong password! Try again:")
                 return WAITING_PASSWORD
 
-        # Eğer authenticate olmuşsa, state'e göre işlem yap
+        # Diğer ayar güncellemeleri...
         try:
             if state == SET_QUANTITY:
-                quantity = float(update.message.text)
-                if quantity <= 0:
-                    raise ValueError("Quantity must be positive")
+                try:
+                    quantity = float(update.message.text)
+                    if quantity <= 0:
+                        raise ValueError
+                    self.settings['quantity'] = quantity
+                    settings_text, markup = self.get_settings_menu()
+                    await update.message.reply_text(
+                        f"✅ Quantity updated to {quantity} USDT\n\n{settings_text}",
+                        reply_markup=markup,
+                        parse_mode='HTML'
+                    )
                     
-                settings.QUANTITY = quantity
-                settings.save_settings()
-                self.settings['quantity'] = quantity
-                
-                await update.message.reply_text(
-                    f"✅ Quantity updated to: {quantity} USDT\n\n"
-                    "Select an option:",
-                    reply_markup=self.get_settings_menu()
-                )
-                
+                except ValueError:
+                    await update.message.reply_text("❌ Please enter a valid quantity (must be greater than 0):")
+                    return SET_QUANTITY
+
             elif state == SET_SL:
-                sl = float(update.message.text)
-                if not 0 <= sl <= 100:
-                    raise ValueError("Stop Loss must be between 0-100")
+                try:
+                    sl = float(update.message.text)
+                    if not 0 < sl <= 100:
+                        raise ValueError
+                    self.settings['stop_loss'] = sl
+                    settings_text, markup = self.get_settings_menu()
+                    await update.message.reply_text(
+                        f"✅ Stop Loss updated to {sl}%\n\n{settings_text}",
+                        reply_markup=markup,
+                        parse_mode='HTML'
+                    )
                     
-                settings.STOP_LOSS_PCT = sl
-                settings.save_settings()
-                self.settings['stop_loss'] = sl
-                
-                await update.message.reply_text(
-                    f"✅ Stop Loss updated to: {sl}%\n\n"
-                    "Select an option:",
-                    reply_markup=self.get_settings_menu()
-                )
-                
+                except ValueError:
+                    await update.message.reply_text("❌ Please enter a valid percentage (1-100):")
+                    return SET_SL
+
             elif state == SET_TP:
-                tp = float(update.message.text)
-                if not 0 <= tp <= 100:
-                    raise ValueError("Take Profit must be between 0-100")
+                try:
+                    tp = float(update.message.text)
+                    if not 0 < tp <= 100:
+                        raise ValueError
+                    self.settings['take_profit'] = tp
+                    settings_text, markup = self.get_settings_menu()
+                    await update.message.reply_text(
+                        f"✅ Take Profit updated to {tp}%\n\n{settings_text}",
+                        reply_markup=markup,
+                        parse_mode='HTML'
+                    )
                     
-                settings.TAKE_PROFIT_PCT = tp
-                settings.save_settings()
-                self.settings['take_profit'] = tp
-                
-                await update.message.reply_text(
-                    f"✅ Take Profit updated to: {tp}%\n\n"
-                    "Select an option:",
-                    reply_markup=self.get_settings_menu()
-                )
-                
+                except ValueError:
+                    await update.message.reply_text("❌ Please enter a valid percentage (1-100):")
+                    return SET_TP
+
             elif state == SET_LEVERAGE:
-                leverage = int(update.message.text)
-                if not 1 <= leverage <= 100:
-                    raise ValueError("Leverage must be between 1-100")
+                try:
+                    leverage = int(update.message.text)
+                    if not 1 <= leverage <= 100:
+                        raise ValueError
+                    self.settings['leverage'] = leverage
+                    settings_text, markup = self.get_settings_menu()
+                    await update.message.reply_text(
+                        f"✅ Leverage updated to {leverage}x\n\n{settings_text}",
+                        reply_markup=markup,
+                        parse_mode='HTML'
+                    )
                     
-                self.settings['leverage'] = leverage
-                settings.save_settings()
-                
-                await update.message.reply_text(
-                    f"✅ Leverage updated to: {leverage}x\n\n"
-                    "Select an option:",
-                    reply_markup=self.get_settings_menu()
-                )
-                
-        except ValueError as e:
-            await update.message.reply_text(
-                f"❌ Invalid value: {str(e)}\n"
-                "Please try again:"
-            )
-            return state
+                except ValueError:
+                    await update.message.reply_text("❌ Please enter a valid leverage (1-100):")
+                    return SET_LEVERAGE
+
+        except Exception as e:
+            logger.error(f"Error handling message: {str(e)}")
+            await update.message.reply_text("❌ An error occurred. Please try again.")
             
-        context.user_data['state'] = SELECTING_ACTION
         return SELECTING_ACTION
 
     async def menu_actions(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -349,8 +358,14 @@ class TelegramBot:
             
         query = update.callback_query
         await query.answer()
-        
-        if query.data == 'test_announcement':
+
+        if query.data == 'open_positions':
+            await self.show_open_positions(query)
+        elif query.data == 'order_history':
+            await self.show_order_history(query)
+        elif query.data == 'account_info':
+            await self.show_account_info(query)
+        elif query.data == 'test_announcement':
             # Simüle edilmiş duyuru mesajı
             test_announcement = {
                 'title': 'Test: New MNT Launchpool!',
@@ -443,66 +458,58 @@ class TelegramBot:
                 )
         
         elif query.data == 'settings':
-            # Send new message instead of editing
-            await query.message.reply_text(
-                "⚙️ <b>Settings Menu</b>\n"
-                "Select a setting to modify:",
-                reply_markup=self.get_settings_menu(),
-                parse_mode=ParseMode.HTML
+            current_settings, reply_markup = self.get_settings_menu()
+            await query.message.edit_text(
+                current_settings,
+                reply_markup=reply_markup,
+                parse_mode='HTML'
             )
+            return SELECTING_ACTION
+        
+        elif query.data == 'main_menu':
+            await query.message.edit_text(
+                "🤖 <b>Main Menu</b>\n\n"
+                "Select an option:",
+                reply_markup=self.get_main_menu(),
+                parse_mode='HTML'
+            )
+            return SELECTING_ACTION
         
         elif query.data == 'set_quantity':
-            context.user_data['state'] = SET_QUANTITY
-            await query.message.reply_text(
-                f"📊 Current quantity: {settings.QUANTITY} USDT\n"
-                "Enter new quantity (minimum 5.0):"
+            await query.message.edit_text(
+                "💰 <b>Set Quantity</b>\n\n"
+                f"Current quantity: {self.settings['quantity']} USDT\n\n"
+                "Enter new quantity in USDT:"
             )
+            context.user_data['state'] = SET_QUANTITY
             return SET_QUANTITY
             
-        elif query.data == 'set_leverage':
-            context.user_data['state'] = SET_LEVERAGE
-            await query.message.reply_text(
-                f"⚡️ Current leverage: {self.settings['leverage']}x\n"
-                "Enter new leverage (1-100):"
-            )
-            return SET_LEVERAGE
-            
         elif query.data == 'set_sl':
-            context.user_data['state'] = SET_SL
-            await query.message.reply_text(
-                f"🔻 Current Stop Loss: {settings.STOP_LOSS_PCT}%\n"
-                "Enter new Stop Loss percentage (0-100):"
+            await query.message.edit_text(
+                "🔻 <b>Set Stop Loss</b>\n\n"
+                f"Current Stop Loss: {self.settings['stop_loss']}%\n\n"
+                "Enter new Stop Loss percentage (1-100):"
             )
+            context.user_data['state'] = SET_SL
             return SET_SL
             
         elif query.data == 'set_tp':
-            context.user_data['state'] = SET_TP
-            await query.message.reply_text(
-                f"🔼 Current Take Profit: {settings.TAKE_PROFIT_PCT}%\n"
-                "Enter new Take Profit percentage (0-100):"
-            )
-            return SET_TP
-
-        elif query.data == 'show_settings':
-            settings_text = (
-                "📊 <b>Current Settings</b>\n\n"
-                f"💰 Quantity: {settings.QUANTITY} USDT\n"
-                f"⚡️ Leverage: {self.settings['leverage']}x\n"
-                f"🔻 Stop Loss: {settings.STOP_LOSS_PCT}%\n"
-                f"🔼 Take Profit: {settings.TAKE_PROFIT_PCT}%\n"
-            )
-            await query.message.reply_text(
-                settings_text,
-                reply_markup=self.get_main_menu(),
-                parse_mode=ParseMode.HTML
-            )
-            
-        elif query.data == 'back_main':
             await query.message.edit_text(
-                "🤖 <b>Main Menu</b>\nSelect an option:",
-                reply_markup=self.get_main_menu(),
-                parse_mode=ParseMode.HTML
+                "🔼 <b>Set Take Profit</b>\n\n"
+                f"Current Take Profit: {self.settings['take_profit']}%\n\n"
+                "Enter new Take Profit percentage (1-100):"
             )
+            context.user_data['state'] = SET_TP
+            return SET_TP
+            
+        elif query.data == 'set_leverage':
+            await query.message.edit_text(
+                "⚡️ <b>Set Leverage</b>\n\n"
+                f"Current Leverage: {self.settings['leverage']}x\n\n"
+                "Enter new leverage (1-100):"
+            )
+            context.user_data['state'] = SET_LEVERAGE
+            return SET_LEVERAGE
     
     async def send_message(self, message, parse_mode='HTML'):
         """Send message to Telegram"""
@@ -714,6 +721,108 @@ class TelegramBot:
                 
         except Exception as e:
             logger.error(f"Error checking position: {str(e)}")
+
+    async def show_open_positions(self, query):
+        """Show open positions"""
+        try:
+            trader = TradeExecutor()
+            positions = trader.get_positions()
+            
+            if not positions:
+                await query.message.reply_text(
+                    "📊 <b>Open Positions</b>\n\n"
+                    "No open positions found.",
+                    parse_mode='HTML'
+                )
+                return
+
+            message = "📊 <b>Open Positions</b>\n\n"
+            
+            for pos in positions:
+                side = "Long 📈" if pos.get('side') == "Buy" else "Short 📉"
+                pnl = float(pos.get('unrealisedPnl', 0))
+                pnl_emoji = "🟢" if pnl > 0 else "🔴" if pnl < 0 else "⚪️"
+                
+                message += (
+                    f"<b>{pos.get('symbol')}</b> - {side}\n"
+                    f"Size: {pos.get('size')} | Leverage: {pos.get('leverage')}x\n"
+                    f"Entry: {float(pos.get('entryPrice', 0)):.4f}\n"
+                    f"Current: {float(pos.get('markPrice', 0)):.4f}\n"
+                    f"PNL: {pnl_emoji} {pnl:.2f} USDT\n"
+                    f"ROE: {float(pos.get('ROE', 0)):.2f}%\n"
+                    "➖➖➖➖➖➖➖➖➖➖\n"
+                )
+
+            await query.message.reply_text(message, parse_mode='HTML')
+
+        except Exception as e:
+            logger.error(f"Error showing positions: {str(e)}")
+            await query.message.reply_text("❌ Error fetching positions!")
+
+    async def show_order_history(self, query):
+        """Show order history"""
+        try:
+            trader = TradeExecutor()
+            orders = trader.get_order_history()
+            
+            if not orders:
+                await query.message.reply_text(
+                    "📜 <b>Recent Orders</b>\n\n"
+                    "No recent orders found.",
+                    parse_mode='HTML'
+                )
+                return
+
+            message = "📜 <b>Recent Orders</b>\n\n"
+            
+            for order in orders:
+                side = "Buy 📈" if order.get('side') == "Buy" else "Sell 📉"
+                status_emoji = "✅" if order.get('status') == "Filled" else "⏳"
+                
+                message += (
+                    f"<b>{order.get('symbol')}</b> - {side}\n"
+                    f"Status: {status_emoji} {order.get('status')}\n"
+                    f"Price: {float(order.get('price', 0)):.4f}\n"
+                    f"Quantity: {order.get('qty')}\n"
+                    f"Type: {order.get('orderType')}\n"
+                    f"Time: {datetime.fromtimestamp(order.get('createdTime')/1000).strftime('%Y-%m-%d %H:%M:%S')}\n"
+                    "➖➖➖➖➖➖➖➖➖➖\n"
+                )
+
+            await query.message.reply_text(message, parse_mode='HTML')
+
+        except Exception as e:
+            logger.error(f"Error showing order history: {str(e)}")
+            await query.message.reply_text("❌ Error fetching order history!")
+
+    async def show_account_info(self, query):
+        """Show account information"""
+        try:
+            trader = TradeExecutor()
+            wallet = trader.get_wallet_info()
+            
+            if not wallet:
+                await query.message.reply_text("❌ Error fetching account info!")
+                return
+
+            wallet_balance = float(wallet.get('walletBalance', 0))
+            available_balance = float(wallet.get('availableBalance', 0))
+            used_margin = wallet_balance - available_balance
+            
+            message = (
+                "💰 <b>Account Information</b>\n\n"
+                f"Wallet Balance: {wallet_balance:.2f} USDT\n"
+                f"Available Balance: {available_balance:.2f} USDT\n"
+                f"Used Margin: {used_margin:.2f} USDT\n"
+                f"Unrealized PNL: {float(wallet.get('unrealisedPnl', 0)):.2f} USDT\n"
+                f"Today's PNL: {float(wallet.get('todayRealizedPnl', 0)):.2f} USDT"
+            )
+
+            await query.message.reply_text(message, parse_mode='HTML')
+
+        except Exception as e:
+            logger.error(f"Error showing account info: {str(e)}")
+            await query.message.reply_text("❌ Error fetching account info!")
 
 def run_bot():
     """Run the bot"""
