@@ -56,10 +56,6 @@ An automated trading bot for Bybit Launchpool announcements with Telegram integr
    - **Trading Settings**  
      ```
      TRADE_SYMBOL=MNTUSDT
-     TRADE_QUANTITY=100
-     STOP_LOSS_PERCENTAGE=2.0
-     TAKE_PROFIT_PERCENTAGE=4.0
-     MAX_POSITION_SIZE=1000
      ```
    - **Other Settings**  
      ```
