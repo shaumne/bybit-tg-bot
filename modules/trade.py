@@ -24,6 +24,10 @@ class TradeExecutor:
             self.testnet = os.getenv('TESTNET', 'true').lower() == 'true'
             self.symbol = os.getenv('TRADE_SYMBOL', 'MNTUSDT')
             
+            if not self.api_key or not self.api_secret:
+                logger.error("Bybit credentials not found in .env!")
+                raise ValueError("Bybit credentials not found!")
+            
             # Initialize Bybit session
             self.session = HTTP(
                 testnet=self.testnet,
@@ -113,7 +117,7 @@ class TradeExecutor:
         
         return quantity
 
-    def execute_trade(self, side="Buy", quantity=None):
+    def execute_trade(self, side="Buy", quantity=None, sl_percentage=None, tp_percentage=None, leverage=None):
         """Execute trade on Bybit"""
         try:
             # Get current price first
@@ -127,84 +131,44 @@ class TradeExecutor:
                 
             current_price = float(ticker['result']['list'][0]['lastPrice'])
             
-            # Calculate minimum quantity for 5 USDT
-            min_value = 5.0  # Minimum 5 USDT
-            min_qty = min_value / current_price
-            min_qty = math.ceil(min_qty)  # Round up to ensure minimum value
-            
-            # Set quantity and normalize it
-            if not quantity:
-                quantity = max(float(os.getenv('QUANTITY', '10')), min_qty)
-            quantity = self.normalize_quantity(quantity)
-            
-            # Double check if value meets minimum
-            order_value = quantity * current_price
-            if order_value < min_value:
-                quantity = math.ceil(min_value / current_price)
-                logger.info(f"Adjusted quantity to meet minimum value: {quantity} (Value: {quantity * current_price:.2f} USDT)")
-            
-            # Set position mode
-            try:
-                self.session.switch_position_mode(
-                    category="linear",
-                    symbol=self.symbol,
-                    mode="MergedSingle"
-                )
-                logger.info("Position mode set to One-Way Mode")
-            except Exception as e:
-                logger.info(f"Position mode setting: {str(e)}")
-            
-            # Set leverage
-            try:
-                leverage = int(os.getenv('LEVERAGE', '1'))
-                self.session.set_leverage(
-                    category="linear",
-                    symbol=self.symbol,
-                    buyLeverage=str(leverage),
-                    sellLeverage=str(leverage)
-                )
-                logger.info(f"Leverage set to {leverage}x")
-            except Exception as e:
-                logger.info(f"Leverage setting: {str(e)}")
-            
-            # Calculate stop loss and take profit
-            sl_percentage = float(os.getenv('STOP_LOSS_PERCENTAGE', '2'))
-            tp_percentage = float(os.getenv('TAKE_PROFIT_PERCENTAGE', '4'))
-            
-            stop_loss = current_price * (1 - sl_percentage/100) if side == "Buy" else current_price * (1 + sl_percentage/100)
-            take_profit = current_price * (1 + tp_percentage/100) if side == "Buy" else current_price * (1 - tp_percentage/100)
-            
-            # Round prices
-            stop_loss = round(stop_loss, 4)
-            take_profit = round(take_profit, 4)
-            
-            logger.info(f"Placing {side} order: Qty={quantity}, Price={current_price}, SL={stop_loss}, TP={take_profit}")
-            
-            # Place order
-            order = self.session.place_order(
-                category="linear",
-                symbol=self.symbol,
-                side=side,
-                orderType="Market",
-                qty=str(quantity),
-                stopLoss=str(stop_loss),
-                takeProfit=str(take_profit),
-                timeInForce="GTC",
-                positionIdx=0
-            )
-            
-            if order and order.get('result'):
-                logger.info(f"Trade executed: {order['result']}")
-                return {
-                    'symbol': self.symbol,
-                    'price': current_price,
-                    'quantity': quantity,
-                    'stop_loss': stop_loss,
-                    'take_profit': take_profit,
-                    'leverage': leverage
-                }
+            # Calculate stop loss and take profit prices
+            if side == "Buy":
+                stop_loss = round(current_price * (1 - sl_percentage/100), 4)
+                take_profit = round(current_price * (1 + tp_percentage/100), 4)
             else:
-                raise Exception(f"Order failed: {order}")
+                stop_loss = round(current_price * (1 + sl_percentage/100), 4)
+                take_profit = round(current_price * (1 - tp_percentage/100), 4)
+
+            # Place the order
+            try:
+                order = self.session.place_order(
+                    category="linear",
+                    symbol=self.symbol,
+                    side=side,
+                    orderType="Market",
+                    qty=str(quantity),
+                    stopLoss=str(stop_loss),
+                    takeProfit=str(take_profit),
+                    timeInForce="GTC",
+                    positionIdx=0
+                )
+                
+                if order and order.get('result'):
+                    logger.info(f"Trade executed: {order['result']}")
+                    return {
+                        'symbol': self.symbol,
+                        'price': current_price,
+                        'quantity': quantity,
+                        'stop_loss': stop_loss,
+                        'take_profit': take_profit,
+                        'leverage': leverage
+                    }
+                else:
+                    raise Exception(f"Order failed: {order}")
+                    
+            except Exception as e:
+                logger.error(f"Order placement error: {str(e)}")
+                raise
                 
         except Exception as e:
             logger.error(f"Trade execution error: {str(e)}")

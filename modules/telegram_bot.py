@@ -3,10 +3,13 @@ from telegram.ext import (
     Application, CommandHandler, CallbackQueryHandler, 
     MessageHandler, filters, ContextTypes, ConversationHandler
 )
+from telegram.ext import JobQueue
 import requests
 import os
 from utils.logger import setup_logger
 from dotenv import load_dotenv
+import asyncio
+from modules.trade import TradeExecutor
 
 logger = setup_logger('telegram')
 
@@ -43,47 +46,72 @@ class TelegramBot:
         self.app = Application.builder().token(self.bot_token).build()
         
         # Add handlers
-        conv_handler = ConversationHandler(
-            entry_points=[CommandHandler('start', self.start_command)],
-            states={
-                SELECTING_ACTION: [
-                    CallbackQueryHandler(self.menu_actions)
-                ],
-                SET_MIN_VALUE: [
-                    MessageHandler(filters.TEXT & ~filters.COMMAND, self.set_min_value)
-                ],
-                SET_QUANTITY: [
-                    MessageHandler(filters.TEXT & ~filters.COMMAND, self.set_quantity)
-                ],
-                SET_SL: [
-                    MessageHandler(filters.TEXT & ~filters.COMMAND, self.set_sl)
-                ],
-                SET_TP: [
-                    MessageHandler(filters.TEXT & ~filters.COMMAND, self.set_tp)
-                ],
-                SET_LEVERAGE: [
-                    MessageHandler(filters.TEXT & ~filters.COMMAND, self.set_leverage)
-                ]
-            },
-            fallbacks=[CommandHandler('cancel', self.cancel)]
-        )
+        self.app.add_handler(CommandHandler("start", self.check_chat(self.start_command)))
+        self.app.add_handler(CommandHandler("settings", self.check_chat(self.show_settings)))
+        self.app.add_handler(CallbackQueryHandler(self.check_chat(self.menu_actions)))
         
-        self.app.add_handler(conv_handler)
-        self.app.add_handler(CommandHandler("settings", self.show_settings))
-        
-        # Start bot
+        # Post init setup
+        self.app.post_init = self.post_init
+        self.app.post_shutdown = self.post_shutdown
+
+    async def post_init(self, application: Application) -> None:
+        """Post initialization hook"""
+        await self.send_initial_menu()
+
+    async def post_shutdown(self, application: Application) -> None:
+        """Post shutdown hook"""
+        logger.info("Bot shutting down...")
+
+    def run(self):
+        """Run the bot"""
+        logger.info("Starting bot...")
         self.app.run_polling(allowed_updates=Update.ALL_TYPES)
+
+    async def send_initial_menu(self):
+        """Send initial menu when bot starts"""
+        try:
+            await self.app.bot.send_message(
+                chat_id=self.chat_id,
+                text="🤖 <b>Bybit Launchpool Bot Started</b>\n\n"
+                     "Welcome! Please select an option:",
+                reply_markup=self.get_main_menu(),
+                parse_mode='HTML'
+            )
+            logger.info("Initial menu sent successfully")
+        except Exception as e:
+            logger.error(f"Error sending initial menu: {str(e)}")
+    
+    def check_chat(self, func):
+        """Decorator to check if the message is from allowed chat"""
+        async def wrapper(update: Update, context: ContextTypes.DEFAULT_TYPE):
+            if not update.effective_chat:
+                return
+                
+            chat_id = str(update.effective_chat.id)
+            
+            # Check if message is from allowed chat
+            if chat_id != str(self.chat_id):
+                logger.warning(f"Unauthorized chat access attempt - Chat: {chat_id}")
+                try:
+                    await update.effective_message.reply_text(
+                        "⚠️ This bot is not available in this chat."
+                    )
+                except Exception:
+                    pass
+                return ConversationHandler.END
+            
+            return await func(update, context)
+        return wrapper
     
     def get_main_menu(self):
         """Get main menu keyboard"""
         keyboard = [
             [
                 InlineKeyboardButton("⚙️ Settings", callback_data='settings'),
-                InlineKeyboardButton("💰 Trade", callback_data='trade_menu')
+                InlineKeyboardButton("🚀 Test Announcement", callback_data='test_announcement')
             ],
             [
-                InlineKeyboardButton("📊 Current Settings", callback_data='show_settings'),
-                InlineKeyboardButton("❌ Cancel", callback_data='cancel')
+                InlineKeyboardButton("📊 Current Settings", callback_data='show_settings')
             ]
         ]
         return InlineKeyboardMarkup(keyboard)
@@ -106,51 +134,51 @@ class TelegramBot:
         ]
         return InlineKeyboardMarkup(keyboard)
     
-    def get_trade_menu(self):
-        """Get trade menu keyboard"""
-        keyboard = [
-            [
-                InlineKeyboardButton("🟢 LONG", callback_data='trade_long'),
-                InlineKeyboardButton("🔴 SHORT", callback_data='trade_short')
-            ],
-            [
-                InlineKeyboardButton("🔙 Back", callback_data='back_main')
-            ]
-        ]
-        return InlineKeyboardMarkup(keyboard)
-    
     async def start_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Send start message with main menu"""
+        """Handle /start command"""
         await update.message.reply_text(
-            "🤖 <b>Bybit Launchpool Bot</b>\n\n"
-            "Welcome! Please select an option:",
+            "🤖 <b>Main Menu</b>\nSelect an option:",
             reply_markup=self.get_main_menu(),
             parse_mode='HTML'
         )
-        return SELECTING_ACTION
-    
+
     async def menu_actions(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Handle menu actions"""
+        """Handle menu button actions"""
         query = update.callback_query
         await query.answer()
         
+        logger.info(f"Button pressed: {query.data}")
+        
         if query.data == 'settings':
             await query.message.edit_text(
-                "⚙️ <b>Settings Menu</b>\n\n"
-                "Please select a setting to modify:",
+                "⚙️ <b>Settings Menu</b>\nSelect a setting to modify:",
                 reply_markup=self.get_settings_menu(),
                 parse_mode='HTML'
             )
-            return SELECTING_ACTION
             
-        elif query.data == 'trade_menu':
-            await query.message.edit_text(
-                "💰 <b>Trade Menu</b>\n\n"
-                "Select trade direction:",
-                reply_markup=self.get_trade_menu(),
-                parse_mode='HTML'
-            )
-            return SELECTING_ACTION
+        elif query.data == 'test_announcement':
+            # Execute trade with current settings
+            trader = TradeExecutor()
+            try:
+                trade_result = trader.execute_trade(
+                    side="Buy",
+                    quantity=self.settings['quantity'],
+                    sl_percentage=self.settings['stop_loss'],
+                    tp_percentage=self.settings['take_profit'],
+                    leverage=self.settings['leverage']
+                )
+                
+                if trade_result:
+                    await self.send_trade_alert(
+                        trade_type="LONG",
+                        symbol=trade_result['symbol'],
+                        price=trade_result['price'],
+                        quantity=trade_result['quantity'],
+                        sl=trade_result['stop_loss'],
+                        tp=trade_result['take_profit']
+                    )
+            except Exception as e:
+                await self.send_error_alert(f"Trade execution error: {str(e)}")
             
         elif query.data == 'show_settings':
             settings_text = (
@@ -166,52 +194,13 @@ class TelegramBot:
                 reply_markup=self.get_main_menu(),
                 parse_mode='HTML'
             )
-            return SELECTING_ACTION
-            
-        elif query.data.startswith('set_'):
-            setting = query.data.replace('set_', '')
-            await query.message.edit_text(
-                f"Please enter new value for {setting.replace('_', ' ').title()}:"
-            )
-            return globals()[query.data.upper()]
             
         elif query.data == 'back_main':
             await query.message.edit_text(
-                "🤖 <b>Main Menu</b>\n\n"
-                "Please select an option:",
+                "🤖 <b>Main Menu</b>\nSelect an option:",
                 reply_markup=self.get_main_menu(),
                 parse_mode='HTML'
             )
-            return SELECTING_ACTION
-            
-        elif query.data.startswith('trade_'):
-            side = "Buy" if query.data == 'trade_long' else "Sell"
-            
-            from modules.trade import TradeExecutor
-            trader = TradeExecutor()
-            
-            try:
-                trade_result = trader.execute_trade(
-                    side=side,
-                    quantity=self.settings['quantity'],
-                    sl_percentage=self.settings['stop_loss'],
-                    tp_percentage=self.settings['take_profit'],
-                    leverage=self.settings['leverage']
-                )
-                
-                if trade_result:
-                    await self.send_trade_alert(
-                        trade_type="LONG" if side == "Buy" else "SHORT",
-                        symbol=trade_result['symbol'],
-                        price=trade_result['price'],
-                        quantity=trade_result['quantity'],
-                        sl=trade_result['stop_loss'],
-                        tp=trade_result['take_profit']
-                    )
-            except Exception as e:
-                await self.send_error_alert(f"Trade execution error: {str(e)}")
-            
-            return SELECTING_ACTION
     
     async def set_min_value(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Set minimum value"""
@@ -304,14 +293,6 @@ class TelegramBot:
             await update.message.reply_text("❌ Please enter a valid number")
             return SET_LEVERAGE
     
-    async def cancel(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Cancel conversation"""
-        await update.message.reply_text(
-            "Operation cancelled.",
-            reply_markup=self.get_main_menu()
-        )
-        return SELECTING_ACTION
-    
     async def show_settings(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Show current settings"""
         settings_text = (
@@ -345,23 +326,28 @@ class TelegramBot:
     async def send_trade_alert(self, trade_type, symbol, price, quantity, sl, tp):
         """Send trade alert message"""
         message = (
-            f"🚨 <b>New Trade Alert</b> 🚨\n\n"
+            "🚨 <b>New Trade Alert</b> 🚨\n\n"
             f"Type: {trade_type}\n"
             f"Symbol: {symbol}\n"
             f"Price: {price}\n"
             f"Quantity: {quantity}\n"
             f"Stop Loss: {sl}\n"
-            f"Take Profit: {tp}\n"
+            f"Take Profit: {tp}"
         )
-        return await self.send_message(message)
+        await self.send_message(message)
     
     async def send_error_alert(self, error_message):
-        """Send error alert"""
+        """Send error alert message"""
         message = (
-            f"⚠️ <b>Error Alert</b> ⚠️\n\n"
-            f"Error: {error_message}"
+            "⚠️ <b>Error Alert</b> ⚠️\n\n"
+            f"{error_message}"
         )
-        return await self.send_message(message)
+        await self.send_message(message)
+
+def run_bot():
+    """Run the bot"""
+    bot = TelegramBot()
+    asyncio.run(bot.run())
 
 # Test message
 bot = TelegramBot()
