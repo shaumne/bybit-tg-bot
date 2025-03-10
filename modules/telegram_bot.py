@@ -432,8 +432,14 @@ class TelegramBot:
                     "🚀 Opening LONG position..."
                 )
                 
-                # Send formatted announcement
-                await self.send_message(message)
+                # Send announcement to all chats
+                for chat_id in context.bot_data.get('authorized_chats', [update.effective_chat.id]):
+                    await context.bot.send_message(
+                        chat_id=chat_id,
+                        text=message,
+                        parse_mode='HTML',
+                        disable_web_page_preview=True
+                    )
                 
                 # Execute trade
                 trader = TradeExecutor()
@@ -443,7 +449,8 @@ class TelegramBot:
                         quantity=self.settings['quantity'],
                         sl_percentage=self.settings['stop_loss'],
                         tp_percentage=self.settings['take_profit'],
-                        leverage=self.settings['leverage']
+                        leverage=self.settings['leverage'],
+                        category="linear"
                     )
                     
                     if trade_result:
@@ -456,7 +463,13 @@ class TelegramBot:
                             "➖➖➖➖➖➖➖➖➖➖\n"
                             "⚠️ <i>Monitor your position in Bybit!</i>"
                         )
-                        await self.send_message(trade_message)
+                        
+                        for chat_id in context.bot_data.get('authorized_chats', [update.effective_chat.id]):
+                            await context.bot.send_message(
+                                chat_id=chat_id,
+                                text=trade_message,
+                                parse_mode='HTML'
+                            )
                         
                 except Exception as e:
                     error_message = (
@@ -464,13 +477,24 @@ class TelegramBot:
                         f"Error: {str(e)}\n\n"
                         "Please check your settings and try again."
                     )
-                    await self.send_message(error_message)
+                    
+                    for chat_id in context.bot_data.get('authorized_chats', [update.effective_chat.id]):
+                        await context.bot.send_message(
+                            chat_id=chat_id,
+                            text=error_message,
+                            parse_mode='HTML'
+                        )
                     
         except Exception as e:
             logger.error(f"Announcement check error: {str(e)}")
-            await self.send_message(
-                f"⚠️ <b>Announcement Check Error:</b>\n{str(e)}"
-            )
+            error_message = f"⚠️ <b>Announcement Check Error:</b>\n{str(e)}"
+            
+            for chat_id in context.bot_data.get('authorized_chats', [update.effective_chat.id]):
+                await context.bot.send_message(
+                    chat_id=chat_id,
+                    text=error_message,
+                    parse_mode='HTML'
+                )
 
 def run_bot():
     """Run the bot"""

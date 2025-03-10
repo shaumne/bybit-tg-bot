@@ -5,10 +5,12 @@ from dotenv import load_dotenv
 from config.settings import settings
 import time
 import math
+import sys
 
 # Load .env
 load_dotenv()
 
+# Configure logger
 logger = setup_logger('trade')
 
 class TradeExecutor:
@@ -22,10 +24,10 @@ class TradeExecutor:
             )
             self.symbol = settings.SYMBOL
             
-            logger.info(f"TradeExecutor initialized. Testnet: {settings.TESTNET}")
+            logger.info("TradeExecutor initialized. Testnet: %s", settings.TESTNET)
             
         except Exception as e:
-            logger.error(f"TradeExecutor initialization error: {str(e)}")
+            logger.error("TradeExecutor initialization error: %s", str(e))
             raise
             
     def get_min_trading_qty(self):
@@ -107,6 +109,45 @@ class TradeExecutor:
     def execute_trade(self, side, quantity, sl_percentage, tp_percentage, leverage, category="linear"):
         """Execute trade with given parameters"""
         try:
+            # Set position mode using direct API call
+            try:
+                self.client._submit_request(
+                    method='POST',
+                    path='/v5/position/switch-position-mode',
+                    data={
+                        'category': category,
+                        'symbol': self.symbol,
+                        'mode': 0  # 0: Merged Single
+                    }
+                )
+            except Exception as e:
+                logger.warning("Could not set position mode: %s", str(e))
+
+            # Set leverage using direct API call
+            try:
+                self.client._submit_request(
+                    method='POST',
+                    path='/v5/position/leverage/save',
+                    data={
+                        'category': category,
+                        'symbol': self.symbol,
+                        'leverage': str(leverage)
+                    }
+                )
+            except Exception as e:
+                logger.warning("Could not set leverage: %s", str(e))
+
+            # Get current price first
+            ticker = self.client.get_tickers(
+                category=category,
+                symbol=self.symbol
+            )
+            
+            if not ticker or not ticker.get('result', {}).get('list'):
+                raise Exception("Could not get current price")
+                
+            current_price = float(ticker['result']['list'][0]['lastPrice'])
+
             # Trade parameters
             params = {
                 'category': category,
@@ -116,65 +157,44 @@ class TradeExecutor:
                 'qty': str(quantity)
             }
 
-            # Execute trade first
+            # Execute trade
             result = self.client.place_order(**params)
             
             if result and result.get('retCode') == 0:
                 order_result = result.get('result', {})
                 
-                # After successful order, set leverage and stop loss/take profit
+                # Calculate SL/TP prices
+                if side == "Buy":
+                    sl_price = current_price * (1 - sl_percentage / 100)
+                    tp_price = current_price * (1 + tp_percentage / 100)
+                else:
+                    sl_price = current_price * (1 + sl_percentage / 100)
+                    tp_price = current_price * (1 - tp_percentage / 100)
+                
+                # Set stop loss and take profit
                 try:
-                    self.client.set_leverage(
-                        symbol=self.symbol,
-                        buyLeverage=str(leverage),
-                        sellLeverage=str(leverage),
-                        category=category
-                    )
-                    
-                    # Set stop loss and take profit
                     self.client.set_trading_stop(
                         category=category,
                         symbol=self.symbol,
-                        stopLoss=str(sl_percentage),
-                        takeProfit=str(tp_percentage),
+                        stopLoss=str(sl_price),
+                        takeProfit=str(tp_price),
                         positionIdx=0
                     )
                 except Exception as e:
-                    logger.warning(f"Could not set leverage/SL/TP: {str(e)}")
+                    logger.warning("Could not set SL/TP: %s", str(e))
                 
-                # Get order details
-                try:
-                    order_details = self.client.get_order_history(
-                        category=category,
-                        symbol=self.symbol,
-                        orderId=order_result.get('orderId')
-                    )
-                    
-                    if order_details and order_details.get('result', {}).get('list'):
-                        executed_order = order_details['result']['list'][0]
-                        return {
-                            'price': executed_order.get('avgPrice', '0'),
-                            'quantity': executed_order.get('qty', quantity),
-                            'stop_loss': sl_percentage,
-                            'take_profit': tp_percentage
-                        }
-                    
-                except Exception as e:
-                    logger.warning(f"Could not get order details: {str(e)}")
-                
-                # Fallback return if can't get order details
                 return {
-                    'price': order_result.get('avgPrice', '0'),
-                    'quantity': order_result.get('qty', quantity),
+                    'price': str(current_price),
+                    'quantity': quantity,
                     'stop_loss': sl_percentage,
                     'take_profit': tp_percentage
                 }
             else:
-                logger.error(f"Trade failed: {result}")
+                logger.error("Trade failed: %s", result)
                 raise Exception(f"Trade failed: {result.get('retMsg', 'Unknown error')}")
 
         except Exception as e:
-            logger.error(f"Trade execution error: {str(e)}")
+            logger.error("Trade execution error: %s", str(e))
             raise
 
     def transfer_to_unified(self, amount=1000):
