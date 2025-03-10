@@ -1,4 +1,5 @@
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.constants import ParseMode
 from telegram.ext import (
     Application, CommandHandler, CallbackQueryHandler, 
     MessageHandler, filters, ContextTypes, ConversationHandler
@@ -10,6 +11,8 @@ from utils.logger import setup_logger
 from dotenv import load_dotenv
 import asyncio
 from modules.trade import TradeExecutor
+from modules.announcements import LaunchpoolAnnouncements
+from datetime import datetime
 
 logger = setup_logger('telegram')
 
@@ -45,6 +48,9 @@ class TelegramBot:
         # Initialize bot application
         self.app = Application.builder().token(self.bot_token).build()
         
+        # Initialize announcements checker
+        self.announcements = LaunchpoolAnnouncements()
+        
         # Add handlers
         self.app.add_handler(CommandHandler("start", self.check_chat(self.start_command)))
         self.app.add_handler(CommandHandler("settings", self.check_chat(self.show_settings)))
@@ -53,6 +59,13 @@ class TelegramBot:
         # Post init setup
         self.app.post_init = self.post_init
         self.app.post_shutdown = self.post_shutdown
+        
+        # Add announcement check job
+        self.app.job_queue.run_repeating(
+            self.check_announcements,
+            interval=30,  # Her 30 saniyede bir kontrol et
+            first=5  # İlk kontrolü 5 saniye sonra başlat
+        )
 
     async def post_init(self, application: Application) -> None:
         """Post initialization hook"""
@@ -153,11 +166,33 @@ class TelegramBot:
             await query.message.edit_text(
                 "⚙️ <b>Settings Menu</b>\nSelect a setting to modify:",
                 reply_markup=self.get_settings_menu(),
-                parse_mode='HTML'
+                parse_mode=ParseMode.HTML
             )
             
         elif query.data == 'test_announcement':
-            # Execute trade with current settings
+            # Send test announcement message
+            test_message = (
+                "🔥 <b>Test Announcement!</b> 🔥\n\n"
+                "📌 <b>Title:</b>\n"
+                "Bybit Launchpool: New MNT Token Mining Event\n\n"
+                "📝 <b>Description:</b>\n"
+                "Bybit is excited to announce the launch of MNT Token Mining Event. "
+                "Users can now stake BIT to earn MNT tokens.\n\n"
+                f"⏰ <b>Time:</b> {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
+                "🔗 <b>Link:</b> https://announcements.bybit.com/\n\n"
+                "➖➖➖➖➖➖➖➖➖➖\n"
+                "🤖 <b>Bot Action:</b>\n"
+                f"• Symbol: MNTUSDT\n"
+                f"• Quantity: {self.settings['quantity']}\n"
+                f"• Stop Loss: {self.settings['stop_loss']}%\n"
+                f"• Take Profit: {self.settings['take_profit']}%\n"
+                f"• Leverage: {self.settings['leverage']}x\n\n"
+                "🚀 Opening LONG position..."
+            )
+            
+            await self.send_message(test_message)
+            
+            # Execute trade
             trader = TradeExecutor()
             try:
                 trade_result = trader.execute_trade(
@@ -169,16 +204,23 @@ class TelegramBot:
                 )
                 
                 if trade_result:
-                    await self.send_trade_alert(
-                        trade_type="LONG",
-                        symbol=trade_result['symbol'],
-                        price=trade_result['price'],
-                        quantity=trade_result['quantity'],
-                        sl=trade_result['stop_loss'],
-                        tp=trade_result['take_profit']
+                    trade_message = (
+                        "✅ <b>Trade Executed Successfully!</b>\n\n"
+                        f"💹 <b>Entry Price:</b> {trade_result['price']}\n"
+                        f"📊 <b>Quantity:</b> {trade_result['quantity']} MNT\n"
+                        f"🔻 <b>Stop Loss:</b> {trade_result['stop_loss']}\n"
+                        f"🔼 <b>Take Profit:</b> {trade_result['take_profit']}\n"
+                        "➖➖➖➖➖➖➖➖➖➖\n"
+                        "⚠️ <i>Monitor your position in Bybit!</i>"
                     )
+                    await self.send_message(trade_message)
             except Exception as e:
-                await self.send_error_alert(f"Trade execution error: {str(e)}")
+                error_message = (
+                    "❌ <b>Trade Execution Failed!</b>\n\n"
+                    f"Error: {str(e)}\n\n"
+                    "Please check your settings and try again."
+                )
+                await self.send_message(error_message)
             
         elif query.data == 'show_settings':
             settings_text = (
@@ -192,14 +234,14 @@ class TelegramBot:
             await query.message.edit_text(
                 settings_text,
                 reply_markup=self.get_main_menu(),
-                parse_mode='HTML'
+                parse_mode=ParseMode.HTML
             )
             
         elif query.data == 'back_main':
             await query.message.edit_text(
                 "🤖 <b>Main Menu</b>\nSelect an option:",
                 reply_markup=self.get_main_menu(),
-                parse_mode='HTML'
+                parse_mode=ParseMode.HTML
             )
     
     async def set_min_value(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -316,7 +358,8 @@ class TelegramBot:
             await self.app.bot.send_message(
                 chat_id=self.chat_id,
                 text=message,
-                parse_mode=parse_mode
+                parse_mode=parse_mode,
+                disable_web_page_preview=True
             )
             return True
         except Exception as e:
@@ -343,6 +386,78 @@ class TelegramBot:
             f"{error_message}"
         )
         await self.send_message(message)
+
+    async def check_announcements(self, context: ContextTypes.DEFAULT_TYPE):
+        """Check for new Launchpool announcements"""
+        try:
+            announcement = self.announcements.check_new_listings()
+            
+            if announcement:
+                # Format announcement time
+                timestamp = int(announcement.get('dateTimestamp', 0)) / 1000
+                date_time = datetime.fromtimestamp(timestamp).strftime('%Y-%m-%d %H:%M:%S')
+                
+                # Get announcement details
+                title = announcement.get('title', 'No Title')
+                description = announcement.get('description', 'No Description')
+                link = announcement.get('url', '#')
+                
+                # Format message
+                message = (
+                    "🔥 <b>New Launchpool Announcement!</b> 🔥\n\n"
+                    f"📌 <b>Title:</b>\n{title}\n\n"
+                    f"📝 <b>Description:</b>\n{description}\n\n"
+                    f"⏰ <b>Time:</b> {date_time}\n"
+                    f"🔗 <b>Link:</b> {link}\n\n"
+                    "➖➖➖➖➖➖➖➖➖➖\n"
+                    "🤖 <b>Bot Action:</b>\n"
+                    f"• Symbol: MNTUSDT\n"
+                    f"• Quantity: {self.settings['quantity']}\n"
+                    f"• Stop Loss: {self.settings['stop_loss']}%\n"
+                    f"• Take Profit: {self.settings['take_profit']}%\n"
+                    f"• Leverage: {self.settings['leverage']}x\n\n"
+                    "🚀 Opening LONG position..."
+                )
+                
+                # Send formatted announcement
+                await self.send_message(message)
+                
+                # Execute trade
+                trader = TradeExecutor()
+                try:
+                    trade_result = trader.execute_trade(
+                        side="Buy",
+                        quantity=self.settings['quantity'],
+                        sl_percentage=self.settings['stop_loss'],
+                        tp_percentage=self.settings['take_profit'],
+                        leverage=self.settings['leverage']
+                    )
+                    
+                    if trade_result:
+                        trade_message = (
+                            "✅ <b>Trade Executed Successfully!</b>\n\n"
+                            f"💹 <b>Entry Price:</b> {trade_result['price']}\n"
+                            f"📊 <b>Quantity:</b> {trade_result['quantity']} MNT\n"
+                            f"🔻 <b>Stop Loss:</b> {trade_result['stop_loss']}\n"
+                            f"🔼 <b>Take Profit:</b> {trade_result['take_profit']}\n"
+                            "➖➖➖➖➖➖➖➖➖➖\n"
+                            "⚠️ <i>Monitor your position in Bybit!</i>"
+                        )
+                        await self.send_message(trade_message)
+                        
+                except Exception as e:
+                    error_message = (
+                        "❌ <b>Trade Execution Failed!</b>\n\n"
+                        f"Error: {str(e)}\n\n"
+                        "Please check your settings and try again."
+                    )
+                    await self.send_message(error_message)
+                    
+        except Exception as e:
+            logger.error(f"Announcement check error: {str(e)}")
+            await self.send_message(
+                f"⚠️ <b>Announcement Check Error:</b>\n{str(e)}"
+            )
 
 def run_bot():
     """Run the bot"""
