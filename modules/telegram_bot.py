@@ -13,6 +13,7 @@ import asyncio
 from modules.trade import TradeExecutor
 from modules.announcements import LaunchpoolAnnouncements
 from datetime import datetime
+from config.settings import settings
 
 logger = setup_logger('telegram')
 
@@ -26,22 +27,23 @@ SET_QUANTITY = 2
 SET_SL = 3
 SET_TP = 4
 SET_LEVERAGE = 5
+WAITING_PASSWORD = 6
+SETTING_PASSWORD = 7
 
 class TelegramBot:
     def __init__(self):
-        self.bot_token = os.getenv('TELEGRAM_BOT_TOKEN')
-        self.chat_id = os.getenv('TELEGRAM_CHAT_ID')
+        self.bot_token = settings.TELEGRAM_BOT_TOKEN
         
-        if not self.bot_token or not self.chat_id:
-            logger.error("Telegram credentials not found in .env!")
-            raise ValueError("Telegram credentials not found!")
+        if not self.bot_token:
+            logger.error("Telegram bot token not found in settings!")
+            raise ValueError("Telegram bot token not found!")
         
         # Initialize settings with defaults
         self.settings = {
             'min_value': 5.0,
-            'quantity': 10.0,
-            'stop_loss': 2.0,
-            'take_profit': 4.0,
+            'quantity': settings.QUANTITY,
+            'stop_loss': settings.STOP_LOSS_PCT,
+            'take_profit': settings.TAKE_PROFIT_PCT,
             'leverage': 1
         }
         
@@ -52,9 +54,10 @@ class TelegramBot:
         self.announcements = LaunchpoolAnnouncements()
         
         # Add handlers
-        self.app.add_handler(CommandHandler("start", self.check_chat(self.start_command)))
-        self.app.add_handler(CommandHandler("settings", self.check_chat(self.show_settings)))
-        self.app.add_handler(CallbackQueryHandler(self.check_chat(self.menu_actions)))
+        self.app.add_handler(CommandHandler("start", self.start_command))
+        self.app.add_handler(CommandHandler("setpassword", self.set_password_command))
+        self.app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_message))
+        self.app.add_handler(CallbackQueryHandler(self.menu_actions))
         
         # Post init setup
         self.app.post_init = self.post_init
@@ -133,65 +136,142 @@ class TelegramBot:
         """Get settings menu keyboard"""
         keyboard = [
             [
-                InlineKeyboardButton("💵 Min Value", callback_data='set_min_value'),
-                InlineKeyboardButton("📈 Quantity", callback_data='set_quantity')
+                InlineKeyboardButton("📊 Quantity", callback_data='set_quantity'),
+                InlineKeyboardButton("⚡️ Leverage", callback_data='set_leverage')
             ],
             [
                 InlineKeyboardButton("🔻 Stop Loss", callback_data='set_sl'),
                 InlineKeyboardButton("🔼 Take Profit", callback_data='set_tp')
             ],
             [
-                InlineKeyboardButton("⚡️ Leverage", callback_data='set_leverage'),
-                InlineKeyboardButton("🔙 Back", callback_data='back_main')
+                InlineKeyboardButton("🔙 Back to Main Menu", callback_data='back_main')
             ]
         ]
         return InlineKeyboardMarkup(keyboard)
     
     async def start_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle /start command"""
+        if not settings.BOT_PASSWORD:
+            await update.message.reply_text(
+                "🔐 Bot is not set up yet. Please set a password:\n"
+                "/setpassword <your_password>"
+            )
+            return SETTING_PASSWORD
+            
         await update.message.reply_text(
-            "🤖 <b>Main Menu</b>\nSelect an option:",
-            reply_markup=self.get_main_menu(),
-            parse_mode='HTML'
+            "🔒 Please enter bot password:"
         )
+        return WAITING_PASSWORD
+
+    async def set_password_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle /setpassword command"""
+        if settings.BOT_PASSWORD:
+            await update.message.reply_text("⚠️ Password is already set!")
+            return
+            
+        try:
+            password = context.args[0]
+            settings.set_password(password)
+            await update.message.reply_text(
+                "✅ Password set successfully!\n"
+                "🔓 Now use /start command to login."
+            )
+        except IndexError:
+            await update.message.reply_text(
+                "❌ Please specify a password:\n"
+                "/setpassword <your_password>"
+            )
+        return ConversationHandler.END
+
+    async def handle_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle text messages"""
+        if not context.user_data.get('authenticated'):
+            # Password check
+            if settings.verify_password(update.message.text):
+                context.user_data['authenticated'] = True
+                await update.message.reply_text(
+                    "🤖 <b>Main Menu</b>\nSelect an option:",
+                    reply_markup=self.get_main_menu(),
+                    parse_mode='HTML'
+                )
+                return SELECTING_ACTION
+            else:
+                await update.message.reply_text("❌ Wrong password! Try again:")
+                return WAITING_PASSWORD
+        
+        # Handle settings updates
+        try:
+            if context.user_data.get('state') == SET_QUANTITY:
+                value = float(update.message.text)
+                if value < 5.0:
+                    await update.message.reply_text("❌ Minimum quantity is 5.0 USDT")
+                    return SET_QUANTITY
+                settings.QUANTITY = value
+                context.user_data['state'] = None
+                
+            elif context.user_data.get('state') == SET_LEVERAGE:
+                value = int(float(update.message.text))
+                if not 1 <= value <= 100:
+                    await update.message.reply_text("❌ Leverage must be between 1 and 100")
+                    return SET_LEVERAGE
+                self.settings['leverage'] = value
+                context.user_data['state'] = None
+                
+            elif context.user_data.get('state') == SET_SL:
+                value = float(update.message.text)
+                if not 0 < value < 100:
+                    await update.message.reply_text("❌ Stop Loss must be between 0 and 100")
+                    return SET_SL
+                settings.STOP_LOSS_PCT = value
+                context.user_data['state'] = None
+                
+            elif context.user_data.get('state') == SET_TP:
+                value = float(update.message.text)
+                if not 0 < value < 100:
+                    await update.message.reply_text("❌ Take Profit must be between 0 and 100")
+                    return SET_TP
+                settings.TAKE_PROFIT_PCT = value
+                context.user_data['state'] = None
+
+            if context.user_data.get('state') is None:
+                # Save settings
+                settings.save_settings()
+                
+                # Show updated settings
+                settings_text = (
+                    "✅ Settings updated successfully!\n\n"
+                    "📊 <b>Current Settings</b>\n"
+                    f"💰 Quantity: {settings.QUANTITY} USDT\n"
+                    f"⚡️ Leverage: {self.settings['leverage']}x\n"
+                    f"🔻 Stop Loss: {settings.STOP_LOSS_PCT}%\n"
+                    f"🔼 Take Profit: {settings.TAKE_PROFIT_PCT}%"
+                )
+                
+                await update.message.reply_text(
+                    settings_text,
+                    reply_markup=self.get_settings_menu(),
+                    parse_mode='HTML'
+                )
+                return SELECTING_ACTION
+                
+        except ValueError:
+            await update.message.reply_text(
+                "❌ Please enter a valid number"
+            )
+            return context.user_data.get('state')
+                
+        return SELECTING_ACTION
 
     async def menu_actions(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle menu button actions"""
+        if not context.user_data.get('authenticated'):
+            await update.callback_query.answer("⚠️ Please login first!")
+            return WAITING_PASSWORD
+            
         query = update.callback_query
         await query.answer()
         
-        logger.info(f"Button pressed: {query.data}")
-        
-        if query.data == 'settings':
-            await query.message.edit_text(
-                "⚙️ <b>Settings Menu</b>\nSelect a setting to modify:",
-                reply_markup=self.get_settings_menu(),
-                parse_mode=ParseMode.HTML
-            )
-            
-        elif query.data == 'test_announcement':
-            # Send test announcement message
-            test_message = (
-                "🔥 <b>Test Announcement!</b> 🔥\n\n"
-                "📌 <b>Title:</b>\n"
-                "Bybit Launchpool: New MNT Token Mining Event\n\n"
-                "📝 <b>Description:</b>\n"
-                "Bybit is excited to announce the launch of MNT Token Mining Event. "
-                "Users can now stake BIT to earn MNT tokens.\n\n"
-                f"⏰ <b>Time:</b> {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
-                "🔗 <b>Link:</b> https://announcements.bybit.com/\n\n"
-                "➖➖➖➖➖➖➖➖➖➖\n"
-                "🤖 <b>Bot Action:</b>\n"
-                f"• Symbol: MNTUSDT\n"
-                f"• Quantity: {self.settings['quantity']}\n"
-                f"• Stop Loss: {self.settings['stop_loss']}%\n"
-                f"• Take Profit: {self.settings['take_profit']}%\n"
-                f"• Leverage: {self.settings['leverage']}x\n\n"
-                "🚀 Opening LONG position..."
-            )
-            
-            await self.send_message(test_message)
-            
+        if query.data == 'test_announcement':
             # Execute trade
             trader = TradeExecutor()
             try:
@@ -200,38 +280,79 @@ class TelegramBot:
                     quantity=self.settings['quantity'],
                     sl_percentage=self.settings['stop_loss'],
                     tp_percentage=self.settings['take_profit'],
-                    leverage=self.settings['leverage']
+                    leverage=self.settings['leverage'],
+                    category="linear"  # Bybit API için gerekli
                 )
                 
                 if trade_result:
-                    trade_message = (
+                    await query.message.reply_text(
                         "✅ <b>Trade Executed Successfully!</b>\n\n"
                         f"💹 <b>Entry Price:</b> {trade_result['price']}\n"
                         f"📊 <b>Quantity:</b> {trade_result['quantity']} MNT\n"
                         f"🔻 <b>Stop Loss:</b> {trade_result['stop_loss']}\n"
                         f"🔼 <b>Take Profit:</b> {trade_result['take_profit']}\n"
                         "➖➖➖➖➖➖➖➖➖➖\n"
-                        "⚠️ <i>Monitor your position in Bybit!</i>"
+                        "⚠️ <i>Monitor your position in Bybit!</i>",
+                        parse_mode='HTML'
                     )
-                    await self.send_message(trade_message)
             except Exception as e:
-                error_message = (
+                await query.message.reply_text(
                     "❌ <b>Trade Execution Failed!</b>\n\n"
                     f"Error: {str(e)}\n\n"
-                    "Please check your settings and try again."
+                    "Please check your settings and try again.",
+                    parse_mode='HTML'
                 )
-                await self.send_message(error_message)
             
+        elif query.data == 'settings':
+            # Send new message instead of editing
+            await query.message.reply_text(
+                "⚙️ <b>Settings Menu</b>\n"
+                "Select a setting to modify:",
+                reply_markup=self.get_settings_menu(),
+                parse_mode=ParseMode.HTML
+            )
+        
+        elif query.data == 'set_quantity':
+            context.user_data['state'] = SET_QUANTITY
+            await query.message.reply_text(
+                f"📊 Current quantity: {settings.QUANTITY} USDT\n"
+                "Enter new quantity (minimum 5.0):"
+            )
+            return SET_QUANTITY
+            
+        elif query.data == 'set_leverage':
+            context.user_data['state'] = SET_LEVERAGE
+            await query.message.reply_text(
+                f"⚡️ Current leverage: {self.settings['leverage']}x\n"
+                "Enter new leverage (1-100):"
+            )
+            return SET_LEVERAGE
+            
+        elif query.data == 'set_sl':
+            context.user_data['state'] = SET_SL
+            await query.message.reply_text(
+                f"🔻 Current Stop Loss: {settings.STOP_LOSS_PCT}%\n"
+                "Enter new Stop Loss percentage (0-100):"
+            )
+            return SET_SL
+            
+        elif query.data == 'set_tp':
+            context.user_data['state'] = SET_TP
+            await query.message.reply_text(
+                f"🔼 Current Take Profit: {settings.TAKE_PROFIT_PCT}%\n"
+                "Enter new Take Profit percentage (0-100):"
+            )
+            return SET_TP
+
         elif query.data == 'show_settings':
             settings_text = (
                 "📊 <b>Current Settings</b>\n\n"
-                f"💵 Min Value: {self.settings['min_value']} USDT\n"
-                f"📈 Quantity: {self.settings['quantity']}\n"
-                f"🔻 Stop Loss: {self.settings['stop_loss']}%\n"
-                f"🔼 Take Profit: {self.settings['take_profit']}%\n"
-                f"⚡️ Leverage: {self.settings['leverage']}x"
+                f"💰 Quantity: {settings.QUANTITY} USDT\n"
+                f"⚡️ Leverage: {self.settings['leverage']}x\n"
+                f"🔻 Stop Loss: {settings.STOP_LOSS_PCT}%\n"
+                f"🔼 Take Profit: {settings.TAKE_PROFIT_PCT}%\n"
             )
-            await query.message.edit_text(
+            await query.message.reply_text(
                 settings_text,
                 reply_markup=self.get_main_menu(),
                 parse_mode=ParseMode.HTML
@@ -243,114 +364,6 @@ class TelegramBot:
                 reply_markup=self.get_main_menu(),
                 parse_mode=ParseMode.HTML
             )
-    
-    async def set_min_value(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Set minimum value"""
-        try:
-            value = float(update.message.text)
-            if value < 5:
-                await update.message.reply_text(
-                    "❌ Minimum value must be at least 5 USDT\n"
-                    "Please try again:"
-                )
-                return SET_MIN_VALUE
-            
-            self.settings['min_value'] = value
-            await update.message.reply_text(
-                f"✅ Minimum value set to {value} USDT",
-                reply_markup=self.get_settings_menu()
-            )
-            return SELECTING_ACTION
-            
-        except ValueError:
-            await update.message.reply_text(
-                "❌ Please enter a valid number\n"
-                "Try again:"
-            )
-            return SET_MIN_VALUE
-    
-    # Similar handlers for quantity, stop loss, take profit, and leverage
-    async def set_quantity(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Set quantity"""
-        try:
-            value = float(update.message.text)
-            self.settings['quantity'] = value
-            await update.message.reply_text(
-                f"✅ Quantity set to {value}",
-                reply_markup=self.get_settings_menu()
-            )
-            return SELECTING_ACTION
-        except ValueError:
-            await update.message.reply_text("❌ Please enter a valid number")
-            return SET_QUANTITY
-    
-    async def set_sl(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Set stop loss percentage"""
-        try:
-            value = float(update.message.text)
-            if value <= 0 or value >= 100:
-                await update.message.reply_text("❌ Please enter a value between 0 and 100")
-                return SET_SL
-            self.settings['stop_loss'] = value
-            await update.message.reply_text(
-                f"✅ Stop Loss set to {value}%",
-                reply_markup=self.get_settings_menu()
-            )
-            return SELECTING_ACTION
-        except ValueError:
-            await update.message.reply_text("❌ Please enter a valid number")
-            return SET_SL
-    
-    async def set_tp(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Set take profit percentage"""
-        try:
-            value = float(update.message.text)
-            if value <= 0 or value >= 100:
-                await update.message.reply_text("❌ Please enter a value between 0 and 100")
-                return SET_TP
-            self.settings['take_profit'] = value
-            await update.message.reply_text(
-                f"✅ Take Profit set to {value}%",
-                reply_markup=self.get_settings_menu()
-            )
-            return SELECTING_ACTION
-        except ValueError:
-            await update.message.reply_text("❌ Please enter a valid number")
-            return SET_TP
-    
-    async def set_leverage(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Set leverage"""
-        try:
-            value = int(update.message.text)
-            if value < 1 or value > 100:
-                await update.message.reply_text("❌ Please enter a value between 1 and 100")
-                return SET_LEVERAGE
-            self.settings['leverage'] = value
-            await update.message.reply_text(
-                f"✅ Leverage set to {value}x",
-                reply_markup=self.get_settings_menu()
-            )
-            return SELECTING_ACTION
-        except ValueError:
-            await update.message.reply_text("❌ Please enter a valid number")
-            return SET_LEVERAGE
-    
-    async def show_settings(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Show current settings"""
-        settings_text = (
-            "📊 <b>Current Settings</b>\n\n"
-            f"💵 Min Value: {self.settings['min_value']} USDT\n"
-            f"📈 Quantity: {self.settings['quantity']}\n"
-            f"🔻 Stop Loss: {self.settings['stop_loss']}%\n"
-            f"🔼 Take Profit: {self.settings['take_profit']}%\n"
-            f"⚡️ Leverage: {self.settings['leverage']}x"
-        )
-        await update.message.reply_text(
-            settings_text,
-            reply_markup=self.get_main_menu(),
-            parse_mode='HTML'
-        )
-        return SELECTING_ACTION
     
     async def send_message(self, message, parse_mode='HTML'):
         """Send message to Telegram"""

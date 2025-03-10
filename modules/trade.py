@@ -2,11 +2,7 @@ from pybit.unified_trading import HTTP
 import os
 from utils.logger import setup_logger
 from dotenv import load_dotenv
-from config.settings import (
-    API_KEY, API_SECRET, TESTNET, SYMBOL, 
-    QUANTITY, MAX_POSITION, STOP_LOSS_PCT, 
-    TAKE_PROFIT_PCT
-)
+from config.settings import settings
 import time
 import math
 
@@ -19,23 +15,14 @@ class TradeExecutor:
     def __init__(self):
         """Initialize TradeExecutor"""
         try:
-            self.api_key = os.getenv('BYBIT_API_KEY')
-            self.api_secret = os.getenv('BYBIT_API_SECRET')
-            self.testnet = os.getenv('TESTNET', 'true').lower() == 'true'
-            self.symbol = os.getenv('TRADE_SYMBOL', 'MNTUSDT')
-            
-            if not self.api_key or not self.api_secret:
-                logger.error("Bybit credentials not found in .env!")
-                raise ValueError("Bybit credentials not found!")
-            
-            # Initialize Bybit session
-            self.session = HTTP(
-                testnet=self.testnet,
-                api_key=self.api_key,
-                api_secret=self.api_secret
+            self.client = HTTP(
+                testnet=settings.TESTNET,
+                api_key=settings.API_KEY,
+                api_secret=settings.API_SECRET
             )
+            self.symbol = settings.SYMBOL
             
-            logger.info(f"TradeExecutor initialized. Testnet: {self.testnet}")
+            logger.info(f"TradeExecutor initialized. Testnet: {settings.TESTNET}")
             
         except Exception as e:
             logger.error(f"TradeExecutor initialization error: {str(e)}")
@@ -44,7 +31,7 @@ class TradeExecutor:
     def get_min_trading_qty(self):
         """Get minimum trading quantity for symbol"""
         try:
-            instruments = self.session.get_instruments_info(
+            instruments = self.client.get_instruments_info(
                 category="linear",
                 symbol=self.symbol
             )
@@ -62,7 +49,7 @@ class TradeExecutor:
     def check_wallet_balance(self):
         """Check wallet USDT balance"""
         try:
-            wallet_info = self.session.get_wallet_balance(
+            wallet_info = self.client.get_wallet_balance(
                 accountType="UNIFIED",
                 coin="USDT"
             )
@@ -82,7 +69,7 @@ class TradeExecutor:
     def get_lot_size_rules(self):
         """Get lot size rules for the symbol"""
         try:
-            instruments = self.session.get_instruments_info(
+            instruments = self.client.get_instruments_info(
                 category="linear",
                 symbol=self.symbol
             )
@@ -117,59 +104,75 @@ class TradeExecutor:
         
         return quantity
 
-    def execute_trade(self, side="Buy", quantity=None, sl_percentage=None, tp_percentage=None, leverage=None):
-        """Execute trade on Bybit"""
+    def execute_trade(self, side, quantity, sl_percentage, tp_percentage, leverage, category="linear"):
+        """Execute trade with given parameters"""
         try:
-            # Get current price first
-            ticker = self.session.get_tickers(
-                category="linear",
-                symbol=self.symbol
-            )
-            
-            if not ticker or not ticker.get('result'):
-                raise Exception("Could not get current price")
-                
-            current_price = float(ticker['result']['list'][0]['lastPrice'])
-            
-            # Calculate stop loss and take profit prices
-            if side == "Buy":
-                stop_loss = round(current_price * (1 - sl_percentage/100), 4)
-                take_profit = round(current_price * (1 + tp_percentage/100), 4)
-            else:
-                stop_loss = round(current_price * (1 + sl_percentage/100), 4)
-                take_profit = round(current_price * (1 - tp_percentage/100), 4)
+            # Trade parameters
+            params = {
+                'category': category,
+                'symbol': self.symbol,
+                'side': side,
+                'orderType': 'Market',
+                'qty': str(quantity)
+            }
 
-            # Place the order
-            try:
-                order = self.session.place_order(
-                    category="linear",
-                    symbol=self.symbol,
-                    side=side,
-                    orderType="Market",
-                    qty=str(quantity),
-                    stopLoss=str(stop_loss),
-                    takeProfit=str(take_profit),
-                    timeInForce="GTC",
-                    positionIdx=0
-                )
+            # Execute trade first
+            result = self.client.place_order(**params)
+            
+            if result and result.get('retCode') == 0:
+                order_result = result.get('result', {})
                 
-                if order and order.get('result'):
-                    logger.info(f"Trade executed: {order['result']}")
-                    return {
-                        'symbol': self.symbol,
-                        'price': current_price,
-                        'quantity': quantity,
-                        'stop_loss': stop_loss,
-                        'take_profit': take_profit,
-                        'leverage': leverage
-                    }
-                else:
-                    raise Exception(f"Order failed: {order}")
+                # After successful order, set leverage and stop loss/take profit
+                try:
+                    self.client.set_leverage(
+                        symbol=self.symbol,
+                        buyLeverage=str(leverage),
+                        sellLeverage=str(leverage),
+                        category=category
+                    )
                     
-            except Exception as e:
-                logger.error(f"Order placement error: {str(e)}")
-                raise
+                    # Set stop loss and take profit
+                    self.client.set_trading_stop(
+                        category=category,
+                        symbol=self.symbol,
+                        stopLoss=str(sl_percentage),
+                        takeProfit=str(tp_percentage),
+                        positionIdx=0
+                    )
+                except Exception as e:
+                    logger.warning(f"Could not set leverage/SL/TP: {str(e)}")
                 
+                # Get order details
+                try:
+                    order_details = self.client.get_order_history(
+                        category=category,
+                        symbol=self.symbol,
+                        orderId=order_result.get('orderId')
+                    )
+                    
+                    if order_details and order_details.get('result', {}).get('list'):
+                        executed_order = order_details['result']['list'][0]
+                        return {
+                            'price': executed_order.get('avgPrice', '0'),
+                            'quantity': executed_order.get('qty', quantity),
+                            'stop_loss': sl_percentage,
+                            'take_profit': tp_percentage
+                        }
+                    
+                except Exception as e:
+                    logger.warning(f"Could not get order details: {str(e)}")
+                
+                # Fallback return if can't get order details
+                return {
+                    'price': order_result.get('avgPrice', '0'),
+                    'quantity': order_result.get('qty', quantity),
+                    'stop_loss': sl_percentage,
+                    'take_profit': tp_percentage
+                }
+            else:
+                logger.error(f"Trade failed: {result}")
+                raise Exception(f"Trade failed: {result.get('retMsg', 'Unknown error')}")
+
         except Exception as e:
             logger.error(f"Trade execution error: {str(e)}")
             raise
@@ -178,7 +181,7 @@ class TradeExecutor:
         """Transfer from Funding to Unified Trading Account"""
         try:
             # Transfer from Funding to Unified
-            transfer = self.session.create_internal_transfer(
+            transfer = self.client.create_internal_transfer(
                 transferId=str(int(time.time())),  # Unique transfer ID
                 coin="USDT",
                 amount=str(amount),
@@ -201,7 +204,7 @@ class TradeExecutor:
         """Check Funding wallet USDT balance"""
         try:
             # Get funding wallet balance
-            wallet_info = self.session.get_wallet_balance(
+            wallet_info = self.client.get_wallet_balance(
                 accountType="FUND",
                 coin="USDT"
             )
@@ -216,4 +219,16 @@ class TradeExecutor:
                 
         except Exception as e:
             logger.error(f"Error checking funding balance: {str(e)}")
-            return 0 
+            return 0
+
+    def get_market_info(self, symbol):
+        """Get market information for symbol"""
+        try:
+            response = self.client.get_tickers(
+                category="linear",
+                symbol=symbol
+            )
+            return response.get('result', {})
+        except Exception as e:
+            logger.error(f"Error getting market info: {str(e)}")
+            return None 

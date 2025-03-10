@@ -2,13 +2,14 @@ import requests
 from datetime import datetime
 import json
 from utils.logger import setup_logger
-from config.settings import CHECK_INTERVAL
+from config.settings import settings
 
 logger = setup_logger('announcements')
 
 class LaunchpoolAnnouncements:
     def __init__(self):
         self.last_check_time = datetime.now()
+        self.check_interval = settings.CHECK_INTERVAL
     
     def check_new_listings(self):
         """Check new Launchpool listings"""

@@ -3,7 +3,7 @@ from modules.announcements import LaunchpoolAnnouncements
 from modules.trade import TradeExecutor
 from modules.telegram_bot import TelegramBot
 from utils.logger import setup_logger
-from config.settings import CHECK_INTERVAL, MAX_RETRIES, RETRY_DELAY
+from config.settings import settings
 
 logger = setup_logger('main')
 
@@ -22,7 +22,7 @@ def main():
             "📊 Mode: Testnet\n"
             "⚡️ Monitoring: Launchpool Announcements\n"
             "💫 Trading: MNTUSDT\n"
-            "⏱ Check Interval: 60s\n\n"
+            f"⏱ Check Interval: {settings.CHECK_INTERVAL}s\n\n"
             "Bot is now monitoring for new Launchpool announcements..."
         )
         bot = TelegramBot()
@@ -53,20 +53,20 @@ def main():
                             tp=trade_result['take_profit']
                         )
                     
-                time.sleep(CHECK_INTERVAL)
+                time.sleep(settings.CHECK_INTERVAL)
                 retry_count = 0
                 
             except Exception as e:
                 retry_count += 1
-                error_msg = f"Error (Attempt {retry_count}/{MAX_RETRIES}): {str(e)}"
+                error_msg = f"Error (Attempt {retry_count}/{settings.MAX_RETRIES}): {str(e)}"
                 logger.error(error_msg)
                 bot.send_error_alert(error_msg)
                 
-                if retry_count >= MAX_RETRIES:
+                if retry_count >= settings.MAX_RETRIES:
                     bot.send_message("🔴 Bot stopped due to maximum retry attempts!")
                     break
                     
-                time.sleep(RETRY_DELAY)
+                time.sleep(settings.RETRY_DELAY)
                 
     except Exception as e:
         logger.critical(f"Critical error: {str(e)}")

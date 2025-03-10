@@ -66,4 +66,8 @@ htmlcov/
 
 # System Files
 .DS_Store
-Thumbs.db 
+Thumbs.db
+
+# Custom Configurations
+user_settings.json
+config/user_settings.json 
