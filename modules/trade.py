@@ -252,3 +252,36 @@ class TradeExecutor:
         except Exception as e:
             logger.error(f"Error getting market info: {str(e)}")
             return None 
+
+    def get_position_info(self):
+        """Get current position information"""
+        try:
+            response = self.client.get_positions(
+                category="linear",
+                symbol=self.symbol
+            )
+            
+            if response and response.get('result', {}).get('list'):
+                return response['result']['list'][0]
+            return None
+            
+        except Exception as e:
+            logger.error(f"Error getting position info: {str(e)}")
+            return None
+            
+    def get_order_history(self, order_id):
+        """Get order history by ID"""
+        try:
+            response = self.client.get_order_history(
+                category="linear",
+                symbol=self.symbol,
+                orderId=order_id
+            )
+            
+            if response and response.get('result', {}).get('list'):
+                return response['result']['list'][0]
+            return None
+            
+        except Exception as e:
+            logger.error(f"Error getting order history: {str(e)}")
+            return None 

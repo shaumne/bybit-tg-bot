@@ -34,6 +34,11 @@ class Settings:
         self.settings_file = Path('config/user_settings.json')
         self.load_saved_settings()
 
+        # New added
+        self.TELEGRAM_CHAT_ID = os.getenv('TELEGRAM_CHAT_ID')
+        if not self.TELEGRAM_CHAT_ID:
+            raise ValueError("TELEGRAM_CHAT_ID not found in .env file!")
+
     def load_saved_settings(self):
         """Kaydedilmiş ayarları yükle"""
         if self.settings_file.exists():
@@ -44,19 +49,22 @@ class Settings:
                         setattr(self, key, value)
 
     def save_settings(self):
-        """Mevcut ayarları dosyaya kaydet"""
-        settings_dict = {
-            'SYMBOL': self.SYMBOL,
+        """Save current settings to JSON file"""
+        settings_data = {
             'QUANTITY': self.QUANTITY,
             'STOP_LOSS_PCT': self.STOP_LOSS_PCT,
             'TAKE_PROFIT_PCT': self.TAKE_PROFIT_PCT,
             'MAX_POSITION': self.MAX_POSITION,
-            'BOT_PASSWORD': self.BOT_PASSWORD
+            'LEVERAGE': 1  # Default leverage
         }
         
-        self.settings_file.parent.mkdir(exist_ok=True)
-        with open(self.settings_file, 'w') as f:
-            json.dump(settings_dict, f, indent=4)
+        try:
+            with open(self.settings_file, 'w') as f:
+                json.dump(settings_data, f, indent=4)
+            return True
+        except Exception as e:
+            print(f"Error saving settings: {str(e)}")
+            return False
 
     def set_password(self, password: str):
         """Bot şifresini ayarla ve kaydet"""
