@@ -15,6 +15,7 @@ from modules.announcements import LaunchpoolAnnouncements
 from datetime import datetime
 from config.settings import settings
 import json
+from telegram.ext import CallbackContext
 
 logger = setup_logger('telegram')
 
@@ -383,28 +384,20 @@ class TelegramBot:
             
         return SELECTING_ACTION
 
-    async def menu_actions(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Handle menu button actions"""
-        if not context.user_data.get('authenticated'):
-            await update.callback_query.answer("⚠️ Please login first!")
-            return WAITING_PASSWORD
-            
+    async def menu_actions(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+        """Handle menu actions."""
         query = update.callback_query
         await query.answer()
 
-        if query.data == 'open_positions':
-            await self.show_open_positions(query)
-        elif query.data == 'order_history':
-            await self.show_order_history(query)
-        elif query.data == 'account_info':
-            await self.show_account_info(query)
-        elif query.data == 'test_announcement':
+        if query.data == 'test_announcement':
             await self.test_announcement(query)
+            return SELECTING_ACTION
+
         elif query.data == 'settings':
-            current_settings, reply_markup = self.get_settings_menu()
+            settings_text, markup = self.get_settings_menu()
             await query.message.edit_text(
-                current_settings,
-                reply_markup=reply_markup,
+                settings_text,
+                reply_markup=markup,
                 parse_mode='HTML'
             )
             return SELECTING_ACTION
@@ -769,7 +762,6 @@ class TelegramBot:
     async def test_announcement(self, query):
         """Test announcement handler"""
         try:
-            # Güncel ayarları kullan
             current_quantity = self.settings.get('quantity', settings.QUANTITY)
             current_sl = self.settings.get('stop_loss', settings.STOP_LOSS_PCT)
             current_tp = self.settings.get('take_profit', settings.TAKE_PROFIT_PCT)
@@ -792,7 +784,7 @@ class TelegramBot:
                 "➖➖➖➖➖➖➖➖➖➖\n"
                 "🤖 <b>Bot Action:</b>\n"
                 "• Symbol: MNTUSDT\n"
-                f"• Quantity: {current_quantity}\n"
+                f"• Order Amount: {current_quantity} USDT\n"
                 f"• Stop Loss: {current_sl}%\n"
                 f"• Take Profit: {current_tp}%\n"
                 f"• Leverage: {current_leverage}x\n\n"
@@ -801,7 +793,6 @@ class TelegramBot:
 
             await query.message.edit_text(message, parse_mode='HTML')
 
-            # Trade işlemi
             trader = TradeExecutor()
             result = await trader.execute_trade(
                 quantity=current_quantity,
@@ -815,9 +806,9 @@ class TelegramBot:
                 message += (
                     "✅ Trade Executed Successfully!\n\n"
                     f"💹 Entry Price: {trade_info.get('entry_price', 0)}\n"
-                    f"📊 Quantity: {current_quantity} MNT\n"
-                    f"🔻 Stop Loss: {current_sl}\n"
-                    f"🔼 Take Profit: {current_tp}\n"
+                    f"📊 Position Size: {current_quantity} MNT\n"
+                    f"🔻 Stop Loss: {current_sl}%\n"
+                    f"🔼 Take Profit: {current_tp}%\n"
                     "➖➖➖➖➖➖➖➖➖➖\n"
                     "⚠️ Monitor your position in Bybit!"
                 )

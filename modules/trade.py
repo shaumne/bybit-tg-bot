@@ -123,19 +123,9 @@ class TradeExecutor:
                 
             mark_price = float(ticker['result']['list'][0]['markPrice'])
             
-            # Long pozisyon için:
-            # Stop Loss giriş fiyatının ALTINDA olmalı
-            # Take Profit giriş fiyatının ÜSTÜNDE olmalı
-            sl_price = str(round(mark_price * (1 - stop_loss/100), 4))  # %X aşağıda
-            tp_price = str(round(mark_price * (1 + take_profit/100), 4)) # %X yukarıda
-            
-            # Leverage ayarla
-            self.client.set_leverage(
-                category="linear",
-                symbol=symbol,
-                buyLeverage=str(leverage),
-                sellLeverage=str(leverage)
-            )
+            # Long pozisyon için SL ve TP hesapla
+            sl_price = str(round(mark_price * (1 - stop_loss/100), 4))
+            tp_price = str(round(mark_price * (1 + take_profit/100), 4))
             
             # Order parametreleri
             order_params = {
@@ -146,7 +136,8 @@ class TradeExecutor:
                 "qty": str(quantity),
                 "stopLoss": sl_price,
                 "takeProfit": tp_price,
-                "leverage": str(leverage)
+                "leverage": str(leverage),
+                "positionIdx": 0  # Tek yönlü pozisyon
             }
             
             logger.info(f"Placing order with params: {order_params}")
