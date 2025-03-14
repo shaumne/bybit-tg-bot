@@ -123,21 +123,37 @@ class TradeExecutor:
                 
             mark_price = float(ticker['result']['list'][0]['markPrice'])
             
-            # Trade parametreleri
-            sl_price = mark_price * (1 - stop_loss/100)  # Stop loss fiyatı
-            tp_price = mark_price * (1 + take_profit/100)  # Take profit fiyatı
+            # Long pozisyon için:
+            # Stop Loss giriş fiyatının ALTINDA olmalı
+            # Take Profit giriş fiyatının ÜSTÜNDE olmalı
+            sl_price = str(round(mark_price * (1 - stop_loss/100), 4))  # %X aşağıda
+            tp_price = str(round(mark_price * (1 + take_profit/100), 4)) # %X yukarıda
             
-            # Pozisyon aç
-            response = self.client.place_order(
+            # Leverage ayarla
+            self.client.set_leverage(
                 category="linear",
                 symbol=symbol,
-                side="Buy",
-                orderType="Market",
-                qty=quantity,
-                stopLoss=str(sl_price),
-                takeProfit=str(tp_price),
-                leverage=str(leverage)
+                buyLeverage=str(leverage),
+                sellLeverage=str(leverage)
             )
+            
+            # Order parametreleri
+            order_params = {
+                "category": "linear",
+                "symbol": symbol,
+                "side": "Buy",
+                "orderType": "Market",
+                "qty": str(quantity),
+                "stopLoss": sl_price,
+                "takeProfit": tp_price,
+                "leverage": str(leverage)
+            }
+            
+            logger.info(f"Placing order with params: {order_params}")
+            logger.info(f"Market price: {mark_price}, SL: {sl_price}, TP: {tp_price}")
+            
+            # Pozisyon aç
+            response = self.client.place_order(**order_params)
             
             if response and response.get('retCode') == 0:
                 return {
@@ -145,12 +161,14 @@ class TradeExecutor:
                     'data': {
                         'entry_price': mark_price,
                         'quantity': quantity,
-                        'stop_loss': sl_price,
-                        'take_profit': tp_price
+                        'stop_loss': float(sl_price),
+                        'take_profit': float(tp_price)
                     }
                 }
             else:
-                return {'success': False, 'error': response.get('retMsg', 'Unknown error')}
+                error_msg = response.get('retMsg', 'Unknown error')
+                logger.error(f"Trade execution failed: {error_msg}")
+                return {'success': False, 'error': error_msg}
                 
         except Exception as e:
             logger.error(f"Error executing trade: {str(e)}")
