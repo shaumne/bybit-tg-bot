@@ -538,7 +538,7 @@ class TelegramBot:
                         trade_message = (
                             "✅ <b>Trade Executed Successfully!</b>\n\n"
                             f"💹 <b>Entry Price:</b> {trade_result['price']}\n"
-                            f"📊 <b>Quantity:</b> {trade_result['quantity']} MNT\n"
+                            f"📊 <b>Quantity:</b> {trade_result['quantity']} USDT\n"
                             f"🔻 <b>Stop Loss:</b> {trade_result['stop_loss']}\n"
                             f"🔼 <b>Take Profit:</b> {trade_result['take_profit']}\n"
                             "➖➖➖➖➖➖➖➖➖➖\n"
@@ -806,7 +806,7 @@ class TelegramBot:
                 message += (
                     "✅ Trade Executed Successfully!\n\n"
                     f"💹 Entry Price: {trade_info.get('entry_price', 0)}\n"
-                    f"📊 Position Size: {current_quantity} MNT\n"
+                    f"📊 Position Size: {current_quantity} USDT\n"
                     f"🔻 Stop Loss: {current_sl}%\n"
                     f"🔼 Take Profit: {current_tp}%\n"
                     "➖➖➖➖➖➖➖➖➖➖\n"
