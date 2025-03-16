@@ -109,7 +109,6 @@ class TradeExecutor:
     async def execute_trade(self, quantity, stop_loss, take_profit, leverage):
         """Execute trade with given parameters"""
         try:
-            # Sembol sabit
             symbol = "MNTUSDT"
             
             # Market fiyatını al
@@ -123,25 +122,51 @@ class TradeExecutor:
                 
             mark_price = float(ticker['result']['list'][0]['markPrice'])
             
-            # Long pozisyon için SL ve TP hesapla
-            sl_price = str(round(mark_price * (1 - stop_loss/100), 4))
-            tp_price = str(round(mark_price * (1 + take_profit/100), 4))
+            # Lot size kurallarını al
+            min_qty, max_qty, qty_step = self.get_lot_size_rules()
+            
+            # USDT miktarını MNT'ye çevir
+            raw_mnt_quantity = quantity / mark_price
+            
+            # MNT miktarını lot size kurallarına göre normalize et
+            steps = round(raw_mnt_quantity / qty_step)
+            mnt_quantity = round(steps * qty_step, 3)
+            
+            # Minimum ve maksimum sınırları kontrol et
+            mnt_quantity = max(min_qty, min(mnt_quantity, max_qty))
+            
+            # Gerçek USDT değerini hesapla
+            actual_usdt = round(mnt_quantity * mark_price, 2)
+            
+            logger.info(f"Converting {quantity} USDT to {mnt_quantity} MNT at price {mark_price}")
+            
+            # Set leverage
+            try:
+                self.client.set_leverage(
+                    category="linear",
+                    symbol=symbol,
+                    buyLeverage=str(leverage),
+                    sellLeverage=str(leverage)
+                )
+            except Exception as e:
+                logger.warning(f"Leverage setting error (might be already set): {str(e)}")
             
             # Order parametreleri
             order_params = {
                 "category": "linear",
                 "symbol": symbol,
                 "side": "Buy",
-                "orderType": "Market",
-                "qty": str(quantity),
-                "stopLoss": sl_price,
-                "takeProfit": tp_price,
+                "orderType": "Market",  # Market emri kullan
+                "qty": str(mnt_quantity),
+                "stopLoss": str(round(mark_price * (1 - stop_loss/100), 4)),
+                "takeProfit": str(round(mark_price * (1 + take_profit/100), 4)),
                 "leverage": str(leverage),
-                "positionIdx": 0  # Tek yönlü pozisyon
+                "positionIdx": 0,
+                "reduceOnly": False,  # Yeni pozisyon açabilir
+                "closeOnTrigger": False  # Stop loss/take profit için
             }
             
             logger.info(f"Placing order with params: {order_params}")
-            logger.info(f"Market price: {mark_price}, SL: {sl_price}, TP: {tp_price}")
             
             # Pozisyon aç
             response = self.client.place_order(**order_params)
@@ -151,9 +176,10 @@ class TradeExecutor:
                     'success': True,
                     'data': {
                         'entry_price': mark_price,
-                        'quantity': quantity,
-                        'stop_loss': float(sl_price),
-                        'take_profit': float(tp_price)
+                        'mnt_quantity': mnt_quantity,
+                        'usdt_value': actual_usdt,
+                        'stop_loss': float(order_params['stopLoss']),
+                        'take_profit': float(order_params['takeProfit'])
                     }
                 }
             else:
